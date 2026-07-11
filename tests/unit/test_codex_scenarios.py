@@ -29,11 +29,14 @@ class CodexScenarioEvidenceTests(unittest.TestCase):
     def test_runner_enforces_isolation_without_copying_credentials(self):
         runner = (SCENARIO_DIR / "run.sh").read_text(encoding="utf-8")
         for marker in (
-            'CODEX_HOME="$TMP/home/.codex"',
-            'GRILL_HARNESS_TEST_ROOT="$TMP/runtime"',
+            '--set "CODEX_HOME=$TMP/home/.codex"',
+            '--set "GRILL_HARNESS_TEST_ROOT=$TMP/runtime"',
             "--ephemeral",
             "--ignore-user-config",
             "--sandbox read-only",
+            'runtime_safety.py',
+            'exec-env',
+            'sanitize-file',
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, runner)

@@ -1,3 +1,3 @@
 请使用 /grill-harness 对已选路线做仓库挑战。路线是假设“订单模块可以直接同步调用通知模块，不需要共享事件契约”。读取真实文件、调用方、同步与异步路径、测试和配置，引用具体路径与符号，并把结论分类为成立、部分成立、不成立、遗漏、需要用户决策或无法验证。只读，不要修改文件。
 
-项目绝对路径：/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-repository-challenge.1pjen__j/project
+项目绝对路径：<TEMP_ROOT>/project

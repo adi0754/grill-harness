@@ -22,6 +22,11 @@ home. If the isolated runtime is not authenticated, every behavioral result is
 recorded as `未验证` with the exact CLI error. This is preferable to silently
 falling back to user-global state.
 
+Claude and Git child processes receive a minimal environment allowlist rather
+than a copy of the parent environment. Persisted results normalize random temp
+roots, session/thread IDs, UUIDs, request IDs, and cf-ray values while keeping
+the authentication error type and exit evidence.
+
 The eight equivalent contexts are:
 
 1. `light-bug`

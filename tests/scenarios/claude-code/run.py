@@ -11,8 +11,12 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from typing import Iterable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from runtime_safety import minimal_environment, sanitize_runtime_text
 
 
 SCENARIOS = (
@@ -77,8 +81,8 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def initialize_fixture(project: Path) -> str:
-    base_env = os.environ.copy()
+def initialize_fixture(project: Path, env: dict[str, str]) -> str:
+    base_env = dict(env)
     base_env.update(
         {
             "GIT_AUTHOR_NAME": "Grill Harness Fixture",
@@ -103,26 +107,19 @@ def initialize_fixture(project: Path) -> str:
     return baseline.stdout.strip()
 
 
-def isolated_env(home: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    for name in (
-        "ANTHROPIC_API_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-    ):
-        env.pop(name, None)
-    env.update(
-        {
+def isolated_env(home: Path, temp_dir: Path | None = None) -> dict[str, str]:
+    return minimal_environment(
+        os.environ,
+        home=str(home),
+        temp_dir=str(temp_dir or home / "tmp"),
+        extra={
             "HOME": str(home),
             "CLAUDE_CONFIG_DIR": str(home / ".claude"),
             "XDG_CONFIG_HOME": str(home / ".config"),
             "XDG_CACHE_HOME": str(home / ".cache"),
             "GRILL_HARNESS_TEST_ROOT": str(home / ".grill-harness"),
-        }
+        },
     )
-    return env
 
 
 def render_prompt(
@@ -232,6 +229,7 @@ def run_scenario(
     home = temp_root / "home"
     project = temp_root / "project"
     reports = temp_root / "reports"
+    temp_dir = temp_root / "tmp"
     task_package = home / ".grill-harness" / "tasks" / "最终验收任务.md"
     report = reports / "验收报告.md"
     result_dir = results_root / scenario
@@ -241,11 +239,13 @@ def run_scenario(
 
     home.mkdir(parents=True)
     reports.mkdir(parents=True)
+    temp_dir.mkdir(parents=True)
+    env = isolated_env(home, temp_dir)
     skill_target = home / ".claude" / "skills" / "grill-harness"
     skill_target.parent.mkdir(parents=True)
     shutil.copytree(repo_root / "skills" / "grill-harness", skill_target)
     shutil.copytree(scenario_dir / "fixtures" / "project", project)
-    baseline = initialize_fixture(project)
+    baseline = initialize_fixture(project, env)
     create_task_package(
         scenario_dir,
         project=project,
@@ -258,7 +258,6 @@ def run_scenario(
     )
     make_read_only(project)
 
-    env = isolated_env(home)
     auth = run_command(
         [claude, "auth", "status", "--json"], cwd=project, env=env, timeout=30
     )
@@ -291,25 +290,32 @@ def run_scenario(
         ["git", "status", "--short"], cwd=project, env=env, timeout=30
     )
     report_written = report.is_file()
-    write_text(result_dir / "prompt.md", prompt)
+    sanitize = lambda value: sanitize_runtime_text(value, temp_root=str(temp_root))
+    write_text(result_dir / "prompt.md", sanitize(prompt))
     shutil.copy2(scenario_dir / f"{scenario}.expected.md", result_dir / "expected.md")
-    write_text(result_dir / "auth-status.json", auth.stdout or auth.stderr)
-    write_text(result_dir / "claude-version.txt", version.stdout + version.stderr)
-    write_text(result_dir / "stdout.json", completed.stdout)
-    write_text(result_dir / "stderr.txt", completed.stderr)
+    write_text(result_dir / "auth-status.json", sanitize(auth.stdout or auth.stderr))
+    write_text(result_dir / "claude-version.txt", sanitize(version.stdout + version.stderr))
+    write_text(result_dir / "stdout.json", sanitize(completed.stdout))
+    write_text(result_dir / "stderr.txt", sanitize(completed.stderr))
     write_text(result_dir / "git-baseline.txt", baseline + "\n")
     write_text(result_dir / "git-status.txt", git_status.stdout + git_status.stderr)
-    write_text(result_dir / "command.txt", display_command(command, home=home, cwd=project))
-    shutil.copy2(task_package, result_dir / "task-package.md")
+    write_text(
+        result_dir / "command.txt",
+        sanitize(display_command(command, home=home, cwd=project)),
+    )
+    write_text(
+        result_dir / "task-package.md",
+        sanitize(task_package.read_text(encoding="utf-8")),
+    )
     write_text(
         result_dir / "environment.txt",
         "\n".join(
             (
                 f"checked_at={dt.datetime.now(dt.timezone.utc).isoformat()}",
                 f"claude={claude}",
-                f"temporary_root={temp_root}",
-                f"isolated_home={home}",
-                f"isolated_skill={skill_target}",
+                "temporary_root=<TEMP_ROOT>",
+                "isolated_home=<TEMP_ROOT>/home",
+                "isolated_skill=<TEMP_ROOT>/home/.claude/skills/grill-harness",
                 f"project_read_only=true",
                 f"session_persistence=false",
                 f"real_grill_harness_touched=false",

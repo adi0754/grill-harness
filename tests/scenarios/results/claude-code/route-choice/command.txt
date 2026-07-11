@@ -1,4 +1,4 @@
-cwd=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-route-choice.bwv6i6it/project
-HOME=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-route-choice.bwv6i6it/home
-CLAUDE_CONFIG_DIR=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-route-choice.bwv6i6it/home/.claude
-command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "请使用 /grill-harness 处理这个设计问题：通知重试既可以放在应用内队列，也可以交给外部队列；当前仓库没有性能数据，团队也不确定供应商 API 的幂等保证。先检查真实仓库，然后说明应该 Research、Prototype，还是两者之一，并给出精简路线选择。现在不要编码。\n\n项目绝对路径：/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-route-choice.bwv6i6it/project\n\n"
+cwd=<TEMP_ROOT>/project
+HOME=<TEMP_ROOT>/home
+CLAUDE_CONFIG_DIR=<TEMP_ROOT>/home/.claude
+command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "请使用 /grill-harness 处理这个设计问题：通知重试既可以放在应用内队列，也可以交给外部队列；当前仓库没有性能数据，团队也不确定供应商 API 的幂等保证。先检查真实仓库，然后说明应该 Research、Prototype，还是两者之一，并给出精简路线选择。现在不要编码。\n\n项目绝对路径：<TEMP_ROOT>/project\n\n"

@@ -1,4 +1,4 @@
-cwd=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-repository-challenge.1pjen__j/project
-HOME=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-repository-challenge.1pjen__j/home
-CLAUDE_CONFIG_DIR=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-repository-challenge.1pjen__j/home/.claude
-command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "请使用 /grill-harness 对已选路线做仓库挑战。路线是假设“订单模块可以直接同步调用通知模块，不需要共享事件契约”。读取真实文件、调用方、同步与异步路径、测试和配置，引用具体路径与符号，并把结论分类为成立、部分成立、不成立、遗漏、需要用户决策或无法验证。只读，不要修改文件。\n\n项目绝对路径：/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-repository-challenge.1pjen__j/project\n\n"
+cwd=<TEMP_ROOT>/project
+HOME=<TEMP_ROOT>/home
+CLAUDE_CONFIG_DIR=<TEMP_ROOT>/home/.claude
+command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "请使用 /grill-harness 对已选路线做仓库挑战。路线是假设“订单模块可以直接同步调用通知模块，不需要共享事件契约”。读取真实文件、调用方、同步与异步路径、测试和配置，引用具体路径与符号，并把结论分类为成立、部分成立、不成立、遗漏、需要用户决策或无法验证。只读，不要修改文件。\n\n项目绝对路径：<TEMP_ROOT>/project\n\n"

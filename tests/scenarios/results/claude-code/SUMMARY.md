@@ -4,6 +4,7 @@ Generated: 2026-07-11T20:21:41.442616+00:00
 
 All eight invocations used a distinct isolated HOME, Skill copy, read-only fixture Git repository, and disabled session persistence.
 The runner did not copy credentials or touch the real `~/.grill-harness`.
+Persisted evidence uses stable placeholders for temporary roots, session IDs, UUIDs, request IDs, and cf-ray values; authentication status and exit evidence remain intact.
 
 | Scenario | CLI exit | Auth exit | Report written | Conclusion |
 |---|---:|---:|---|---|

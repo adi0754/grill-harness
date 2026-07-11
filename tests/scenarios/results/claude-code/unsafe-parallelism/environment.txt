@@ -1,8 +1,8 @@
 checked_at=2026-07-11T20:21:39.368121+00:00
 claude=/opt/homebrew/bin/claude
-temporary_root=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o
-isolated_home=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o/home
-isolated_skill=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o/home/.claude/skills/grill-harness
+temporary_root=<TEMP_ROOT>
+isolated_home=<TEMP_ROOT>/home
+isolated_skill=<TEMP_ROOT>/home/.claude/skills/grill-harness
 project_read_only=true
 session_persistence=false
 real_grill_harness_touched=false

@@ -1,4 +1,4 @@
-cwd=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o/project
-HOME=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o/home
-CLAUDE_CONFIG_DIR=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o/home/.claude
-command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "请使用 /grill-harness 检查任务图的并行安全性。TASK-001 和 TASK-002 都计划修改同一个工作区中的 `contracts/events.json`，没有独立 worktree，也没有用户授权创建分支或 worktree。读取 fixture，计算安全 Frontier，并说明能否并行。不要创建 worktree、分支或修改文件。\n\n项目绝对路径：/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o/project\n任务图：/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-unsafe-parallelism.vgpiye3o/project/workflow/parallel/tasks.yaml\n\n"
+cwd=<TEMP_ROOT>/project
+HOME=<TEMP_ROOT>/home
+CLAUDE_CONFIG_DIR=<TEMP_ROOT>/home/.claude
+command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "请使用 /grill-harness 检查任务图的并行安全性。TASK-001 和 TASK-002 都计划修改同一个工作区中的 `contracts/events.json`，没有独立 worktree，也没有用户授权创建分支或 worktree。读取 fixture，计算安全 Frontier，并说明能否并行。不要创建 worktree、分支或修改文件。\n\n项目绝对路径：<TEMP_ROOT>/project\n任务图：<TEMP_ROOT>/project/workflow/parallel/tasks.yaml\n\n"

@@ -31,12 +31,14 @@ The shared rubric scores the nine design dimensions: premature coding, one-quest
 ## Isolation and safety
 
 - Every runner creates a temporary HOME, runtime configuration directory, Skill copy, and `GRILL_HARNESS_TEST_ROOT`.
+- Child processes start from a minimal allowlist containing only executable PATH, locale, isolated HOME/TMP paths, and explicit runtime paths; model and cloud credential variables are not inherited.
 - User credentials are not read or copied.
 - Claude Code uses a distinct read-only Git fixture for each scenario and disables session persistence; recorded fixture `git status` is empty after every call.
 - Codex uses the read-only sandbox for behavioral scenarios. The startup-prompt path would grant write access only to a temporary report directory after a successful auth probe.
 - Neither runner touches user global configuration or the real `~/.grill-harness`.
 - No dependency was installed.
 - The Codex runner does not create placeholder upstream Skills; a future authenticated behavioral rerun must provision the real required capabilities inside its isolated Skill directory.
+- Persisted evidence normalizes random temporary roots, thread/session identifiers, UUIDs, request IDs, and cf-ray values to stable placeholders while preserving exit codes, HTTP status, and authentication error types.
 
 ## Local startup prompt
 
