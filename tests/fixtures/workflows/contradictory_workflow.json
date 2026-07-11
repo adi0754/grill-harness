@@ -1,0 +1,9 @@
+{
+  "phases": [
+    {"id": "specification", "status": "completed", "artifacts": ["missing-spec"], "evidence": []},
+    {"id": "route", "status": "skipped", "optional": false, "skip_reason": ""}
+  ],
+  "artifacts": [],
+  "tasks": [],
+  "evidence": []
+}

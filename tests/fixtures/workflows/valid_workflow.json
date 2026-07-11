@@ -1,0 +1,14 @@
+{
+  "phases": [
+    {"id": "specification", "status": "completed", "artifacts": ["spec-v1"], "evidence": ["EVD-001"]}
+  ],
+  "artifacts": [
+    {"id": "spec-v1", "kind": "spec", "status": "completed", "decisions": ["DEC-001"]}
+  ],
+  "tasks": [
+    {"id": "TASK-001", "status": "completed", "depends_on": ["spec-v1"], "decisions": ["DEC-001"]}
+  ],
+  "evidence": [
+    {"id": "EVD-001", "status": "valid", "depends_on": ["spec-v1", "TASK-001"], "decisions": ["DEC-001"]}
+  ]
+}
