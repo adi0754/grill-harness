@@ -68,6 +68,15 @@ class LedgerContractTests(unittest.TestCase):
             ]
         )
 
+    def test_ledger_history_must_increase_in_input_occurrence_order(self):
+        with self.assertRaisesRegex(state.LedgerContractError, "occurrence order"):
+            state.validate_ledger_history(
+                [
+                    {"id": "DEC-001", "type": "DEC", "version": 2},
+                    {"id": "DEC-001", "type": "DEC", "version": 1},
+                ]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

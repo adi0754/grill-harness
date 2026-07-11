@@ -10,6 +10,25 @@ import state
 
 
 class WorkflowStateMachineTests(unittest.TestCase):
+    def test_workflow_phases_have_a_complete_stable_order(self):
+        self.assertEqual(
+            state.WORKFLOW_PHASES,
+            (
+                "preflight",
+                "alignment",
+                "requirements_baseline",
+                "design",
+                "route_selection",
+                "repository_challenge",
+                "specification",
+                "final_spec_approval",
+                "tasking",
+                "implementation",
+                "independent_assurance",
+                "knowledge_archive",
+            ),
+        )
+
     def test_every_state_pair_matches_the_declared_transition_contract(self):
         legal = {
             "pending": {
@@ -96,6 +115,29 @@ class WorkflowStateMachineTests(unittest.TestCase):
         )
         state.validate_phase_entry("implementation", gates)
 
+    def test_phase_entry_is_fail_closed_and_aliases_cannot_bypass_gates(self):
+        approved = {
+            gate: {
+                "status": "approved",
+                "approval_id": "DEC-00{}".format(index),
+                "artifact_versions": {gate: 1},
+            }
+            for index, gate in enumerate(state.HUMAN_GATES, start=1)
+        }
+        for unknown in ("implement", "implementation_loop", "assurance", "unknown"):
+            with self.subTest(unknown=unknown):
+                with self.assertRaisesRegex(state.StateContractError, "unknown phase"):
+                    state.validate_phase_entry(unknown, approved)
+
+        for guarded in ("tasking", "implementation", "independent_assurance"):
+            with self.subTest(guarded=guarded):
+                gates = dict(approved)
+                gates.pop("final_spec_approval")
+                with self.assertRaisesRegex(
+                    state.StateContractError, "final_spec_approval"
+                ):
+                    state.validate_phase_entry(guarded, gates)
+
     def test_approval_without_artifact_version_is_not_a_valid_gate(self):
         gate = {"status": "approved", "approval_id": "DEC-001", "artifact_versions": {}}
         with self.assertRaisesRegex(state.StateContractError, "artifact version"):
@@ -124,6 +166,67 @@ class WorkflowStateMachineTests(unittest.TestCase):
                 "evidence": ["EVD-001"],
             }
         )
+
+    def test_completed_phase_rejects_malformed_artifact_and_evidence_id_sequences(self):
+        invalid_values = (
+            "EVD-001",
+            {"EVD-001": True},
+            [""],
+            ["   "],
+            ["EVD-001", 2],
+        )
+        for field in ("artifacts", "evidence"):
+            for invalid in invalid_values:
+                phase = {
+                    "id": "specification",
+                    "status": "completed",
+                    "artifacts": ["spec-v1"],
+                    "evidence": ["EVD-001"],
+                }
+                phase[field] = invalid
+                with self.subTest(field=field, invalid=invalid):
+                    with self.assertRaisesRegex(
+                        state.StateContractError, "non-empty string IDs"
+                    ):
+                        state.validate_phase(phase)
+
+    def test_transition_state_atomically_validates_completion_contract(self):
+        phase = {
+            "id": "specification",
+            "status": "in_progress",
+            "artifacts": [],
+            "evidence": [],
+        }
+        with self.assertRaises(state.StateContractError):
+            state.transition_state(phase, "completed")
+
+        completed = state.transition_state(
+            dict(phase, artifacts=["spec-v1"], evidence=["EVD-001"]),
+            "completed",
+            gates={
+                "route_selection": {
+                    "status": "approved",
+                    "approval_id": "DEC-002",
+                    "artifact_versions": {"route-card": 1},
+                }
+            },
+        )
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(phase["status"], "in_progress")
+
+    def test_transition_state_rejects_string_only_mutation_calls(self):
+        with self.assertRaisesRegex(state.StateContractError, "complete phase record"):
+            state.transition_state("in_progress", "completed")
+
+    def test_transition_state_cannot_complete_a_guarded_phase_without_approval(self):
+        phase = {
+            "id": "implementation",
+            "status": "in_progress",
+            "artifacts": ["implementation-v1"],
+            "evidence": ["EVD-001"],
+        }
+        with self.assertRaisesRegex(state.StateContractError, "final_spec_approval"):
+            state.transition_state(phase, "completed")
 
     def test_skipped_phase_must_be_optional_and_record_a_reason(self):
         with self.assertRaises(state.StateContractError):

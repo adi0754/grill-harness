@@ -67,12 +67,34 @@ HUMAN_GATES = (
     "final_spec_approval",
 )
 
+WORKFLOW_PHASES = (
+    "preflight",
+    "alignment",
+    "requirements_baseline",
+    "design",
+    "route_selection",
+    "repository_challenge",
+    "specification",
+    "final_spec_approval",
+    "tasking",
+    "implementation",
+    "independent_assurance",
+    "knowledge_archive",
+)
+
 PHASE_GATE_REQUIREMENTS = {
+    "preflight": None,
+    "alignment": None,
+    "requirements_baseline": None,
     "design": "requirements_baseline",
+    "route_selection": "requirements_baseline",
     "repository_challenge": "route_selection",
     "specification": "route_selection",
+    "final_spec_approval": "route_selection",
     "tasking": "final_spec_approval",
     "implementation": "final_spec_approval",
+    "independent_assurance": "final_spec_approval",
+    "knowledge_archive": "final_spec_approval",
 }
 
 LEDGER_RECORD_TYPES = (
@@ -121,11 +143,40 @@ def validate_transition(source: str, target: str) -> None:
         )
 
 
-def transition_state(source: str, target: str) -> str:
-    """Validate and return the target state for callers building new records."""
+def next_state(source: str, target: str) -> str:
+    """Pure matrix query that returns a legal target without mutating a phase."""
 
     validate_transition(source, target)
     return target
+
+
+def transition_state(
+    phase: Mapping[str, Any],
+    target: str,
+    gates: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Copy and atomically transition a complete phase record.
+
+    String-only calls are deliberately rejected: they cannot enforce completed
+    artifact/evidence contracts or phase-entry human gates. Use ``next_state``
+    for a pure state-matrix query.
+    """
+
+    if not isinstance(phase, Mapping):
+        raise StateContractError(
+            "transition_state requires a complete phase record; "
+            "use next_state for a pure matrix query"
+        )
+    phase_id = phase.get("id")
+    source = phase.get("status")
+    validate_transition(source, target)
+    if target in ("in_progress", "completed"):
+        validate_phase_entry(phase_id, {} if gates is None else gates)
+    updated = copy.deepcopy(dict(phase))
+    updated["status"] = target
+    if target == "completed":
+        validate_phase(updated)
+    return updated
 
 
 def validate_human_gate(gate: str, status: str) -> None:
@@ -167,7 +218,9 @@ def validate_phase_entry(
 ) -> None:
     """Reject downstream work until its required human checkpoint is approved."""
 
-    required_gate = PHASE_GATE_REQUIREMENTS.get(phase_id)
+    if phase_id not in WORKFLOW_PHASES:
+        raise StateContractError("unknown phase: {!r}".format(phase_id))
+    required_gate = PHASE_GATE_REQUIREMENTS[phase_id]
     if required_gate is None:
         return
     gate_record = gates.get(required_gate)
@@ -182,18 +235,29 @@ def validate_phase(phase: Mapping[str, Any]) -> None:
     status = phase.get("status")
     _require_known_state(status)
     if status == "completed":
-        if not phase.get("artifacts"):
-            raise StateContractError("completed phase requires at least one artifact")
-        if not phase.get("evidence"):
-            raise StateContractError(
-                "completed phase requires at least one evidence record"
-            )
+        _validate_id_sequence(phase.get("artifacts"), "artifacts")
+        _validate_id_sequence(phase.get("evidence"), "evidence")
     if status == "skipped":
         if phase.get("optional") is not True:
             raise StateContractError("only an optional phase may be skipped")
         reason = phase.get("skip_reason")
         if not isinstance(reason, str) or not reason.strip():
             raise StateContractError("skipped phase requires a reason")
+
+
+def _validate_id_sequence(value: Any, field_name: str) -> None:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes, bytearray))
+        or isinstance(value, Mapping)
+        or not value
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+    ):
+        raise StateContractError(
+            "completed phase {} must be a sequence of non-empty string IDs".format(
+                field_name
+            )
+        )
 
 
 def _positive_integer(value: Any, field_name: str) -> int:
@@ -278,19 +342,19 @@ def revise_ledger_record(
 
 
 def validate_ledger(records: Iterable[Mapping[str, Any]]) -> None:
-    versions_by_id = {}
+    next_version_by_id = {}
     for record in records:
         _validate_record(record)
-        versions_by_id.setdefault(record["id"], []).append(record["version"])
-    for record_id, versions in versions_by_id.items():
-        ordered = sorted(versions)
-        expected = list(range(1, len(ordered) + 1))
-        if ordered != expected or len(ordered) != len(set(ordered)):
+        record_id = record["id"]
+        expected = next_version_by_id.get(record_id, 1)
+        if record["version"] != expected:
             raise LedgerContractError(
-                "ledger versions for {} must be unique and contiguous from 1".format(
-                    record_id
+                "ledger versions for {} must be contiguous in occurrence order; "
+                "expected {}, found {}".format(
+                    record_id, expected, record["version"]
                 )
             )
+        next_version_by_id[record_id] = expected + 1
 
 
 def validate_ledger_history(records: Sequence[Mapping[str, Any]]) -> None:
@@ -567,6 +631,7 @@ __all__ = [
     "SHORT_ID_LENGTH",
     "STATES",
     "StateContractError",
+    "WORKFLOW_PHASES",
     "WORKFLOW_STATES",
     "can_transition",
     "create_ledger_record",
@@ -575,6 +640,7 @@ __all__ = [
     "new_workflow_id",
     "normalize_git_remote",
     "normalize_project_path",
+    "next_state",
     "project_fingerprint",
     "project_id",
     "revise_ledger_record",

@@ -58,6 +58,36 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(updated["evidence"][1]["status"], "valid")
         for affected in (updated["artifacts"][0], updated["tasks"][0], updated["evidence"][0]):
             self.assertEqual(affected["stale_because"], "DEC-001")
+            self.assertEqual(affected["currentness"], "stale")
+
+    def test_changed_decision_marks_terminal_dependents_noncurrent_without_erasing_lifecycle(self):
+        workflow = {
+            "artifacts": [
+                {"id": "spec", "status": "superseded", "decisions": ["DEC-001"]}
+            ],
+            "tasks": [
+                {"id": "TASK-001", "status": "failed", "decisions": ["DEC-001"]},
+                {"id": "TASK-002", "status": "cancelled", "depends_on": ["spec"]},
+            ],
+            "evidence": [
+                {"id": "EVD-001", "status": "valid", "depends_on": ["TASK-001"]}
+            ],
+        }
+
+        updated = validate.propagate_decision_change(workflow, "DEC-001")
+
+        for collection, expected_statuses in (
+            ("artifacts", ["superseded"]),
+            ("tasks", ["failed", "cancelled"]),
+            ("evidence", ["stale"]),
+        ):
+            self.assertEqual(
+                [record["status"] for record in updated[collection]],
+                expected_statuses,
+            )
+            self.assertTrue(
+                all(record["currentness"] == "stale" for record in updated[collection])
+            )
 
     def test_reconciliation_reports_duplicate_ids_instead_of_overwriting_them(self):
         workflow = load_fixture("valid_workflow.json")

@@ -139,9 +139,10 @@ def reconcile_workflow(workflow: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _mark_stale(record: MutableMapping[str, Any], reason: str) -> None:
+    record["currentness"] = "stale"
+    record["stale_because"] = reason
     if record.get("status") not in ("superseded", "cancelled", "failed"):
         record["status"] = "stale"
-        record["stale_because"] = reason
 
 
 def propagate_decision_change(
