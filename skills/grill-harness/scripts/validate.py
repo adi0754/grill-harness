@@ -2,6 +2,7 @@
 
 import copy
 import os
+from datetime import datetime
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Set
 
 import state
@@ -266,11 +267,35 @@ def _id_list(value: Any) -> bool:
     return isinstance(value, list) and all(_nonempty_string(item) for item in value)
 
 
+def _parse_aware_iso8601(value: Any):
+    if not _nonempty_string(value):
+        return None
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
 def validate_evidence(
-    evidence: Mapping[str, Any], current_baseline: str = None
+    evidence: Mapping[str, Any], current_baseline: str = None, current_time: str = None
 ) -> Dict[str, Any]:
     """Validate whether one evidence record can support a completion claim."""
 
+    if not isinstance(evidence, Mapping):
+        return {
+            "valid": False,
+            "conflicts": [
+                _conflict(
+                    "INVALID_EVIDENCE_RECORD",
+                    "证据记录不是可识别的映射，无法验证其来源和当前性。",
+                    "恢复原始证据结构并补齐稳定字段后重新验证。",
+                )
+            ],
+        }
     conflicts = []
     evidence_id = evidence.get("id", "<unknown>")
     if not _nonempty_string(evidence.get("id")):
@@ -360,12 +385,28 @@ def validate_evidence(
                 evidence_id=evidence_id,
             )
         )
-    if not _nonempty_string(evidence.get("executed_at")):
+    parsed_times = {}
+    for field in ("executed_at", "validated_at", "expires_at"):
+        parsed = _parse_aware_iso8601(evidence.get(field))
+        if parsed is None:
+            conflicts.append(
+                _conflict(
+                    "EVIDENCE_TIME",
+                    "证据 {} 的 {} 不是带时区的 ISO-8601 时间。".format(evidence_id, field),
+                    "记录可解析且带 UTC 偏移的真实时间后重新验证。",
+                    evidence_id=evidence_id,
+                    field=field,
+                )
+            )
+        else:
+            parsed_times[field] = parsed
+    parsed_current_time = _parse_aware_iso8601(current_time)
+    if parsed_current_time is None:
         conflicts.append(
             _conflict(
-                "EVIDENCE_EXECUTED_AT",
-                "证据 {} 缺少实际执行时间。".format(evidence_id),
-                "记录带时区的真实执行时间，并在证据过期时重新运行。",
+                "EVIDENCE_CURRENT_TIME",
+                "证据验证缺少显式、带时区的当前时间。",
+                "由调用方提供确定的 ISO-8601 当前时间，不要读取隐式系统时钟。",
                 evidence_id=evidence_id,
             )
         )
@@ -379,10 +420,18 @@ def validate_evidence(
                 evidence_id=evidence_id,
             )
         )
+    temporally_stale = False
+    if parsed_current_time is not None and len(parsed_times) == 3:
+        temporally_stale = (
+            parsed_times["executed_at"] > parsed_times["validated_at"]
+            or parsed_times["validated_at"] > parsed_current_time
+            or parsed_current_time >= parsed_times["expires_at"]
+        )
     if (
         evidence.get("status") != "valid"
         or evidence.get("currentness") != "current"
         or bool(evidence.get("stale_because"))
+        or temporally_stale
     ):
         conflicts.append(
             _conflict(
@@ -398,15 +447,34 @@ def validate_evidence(
 
 
 def validate_evidence_records(
-    records: Iterable[Mapping[str, Any]], current_baseline: str = None
+    records: Iterable[Mapping[str, Any]],
+    current_baseline: str = None,
+    current_time: str = None,
 ) -> Dict[str, Any]:
     """Validate a collection without hiding which evidence record failed."""
 
     reports = []
     conflicts = []
+    seen_ids = set()
     for evidence in records:
-        report = validate_evidence(evidence, current_baseline=current_baseline)
-        reports.append({"evidence_id": evidence.get("id"), **report})
+        evidence_id = evidence.get("id") if isinstance(evidence, Mapping) else None
+        if _nonempty_string(evidence_id) and evidence_id in seen_ids:
+            conflicts.append(
+                _conflict(
+                    "DUPLICATE_EVIDENCE_ID",
+                    "证据集合存在重复 ID {}，不能以后写记录覆盖前一事实。".format(evidence_id),
+                    "保留两条原始记录，由用户确认正确版本和替代关系。",
+                    evidence_id=evidence_id,
+                )
+            )
+        elif _nonempty_string(evidence_id):
+            seen_ids.add(evidence_id)
+        report = validate_evidence(
+            evidence,
+            current_baseline=current_baseline,
+            current_time=current_time,
+        )
+        reports.append({"evidence_id": evidence_id, **report})
         conflicts.extend(report["conflicts"])
     return {"valid": not conflicts, "reports": reports, "conflicts": conflicts}
 

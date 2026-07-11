@@ -55,6 +55,15 @@ class ParallelConflictTests(unittest.TestCase):
                     "SHARED_WRITE_PATH",
                 )
 
+    def test_repository_root_write_scope_conflicts_with_every_relative_path(self):
+        for root_scope in (".", "./", "src/..", "/"):
+            with self.subTest(root_scope=root_scope):
+                self.assert_conflict_code(
+                    task("TASK-001", write_paths=[root_scope]),
+                    task("TASK-002", write_paths=["tests/unit/test_api.py"]),
+                    "SHARED_WRITE_PATH",
+                )
+
     def test_shared_contract_migration_and_generated_output_conflict(self):
         cases = (
             (

@@ -153,6 +153,21 @@ class TaskGraphTests(unittest.TestCase):
                     "[\u4e00-\u9fff]",
                 )
 
+    def test_task_without_explicit_dependency_field_is_malformed(self):
+        tasks = [{"id": "TASK-001", "status": "pending"}]
+
+        graph_report = task_graph.validate_dag(tasks)
+        frontier_report = task_graph.calculate_frontier(tasks)
+        parallel_report = task_graph.parallel_candidates(tasks)
+
+        self.assertFalse(graph_report["valid"])
+        self.assertIn(
+            "MISSING_BLOCKERS",
+            {item["code"] for item in graph_report["conflicts"]},
+        )
+        self.assertEqual(frontier_report["frontier"], [])
+        self.assertFalse(parallel_report["valid"])
+
 
 if __name__ == "__main__":
     unittest.main()

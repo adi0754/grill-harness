@@ -88,6 +88,16 @@ def _index_tasks(
                 )
             )
             continue
+        if "depends_on" not in task and "blockers" not in task:
+            conflicts.append(
+                _conflict(
+                    "MISSING_BLOCKERS",
+                    "任务 {} 未显式声明 depends_on 或 blockers，无法判断是否为根任务。".format(task_id),
+                    "显式写入依赖字段；根任务使用空列表，不要依赖字段缺失的隐式含义。",
+                    task_id=task_id,
+                )
+            )
+            continue
         task_dependencies, contradictory_aliases = _task_dependencies(task)
         if task_dependencies is None:
             code = "CONTRADICTORY_BLOCKERS" if contradictory_aliases else "INVALID_BLOCKERS"
@@ -242,8 +252,12 @@ def _normalize_write_path(path: str) -> str:
 
 
 def _paths_overlap(left: str, right: str) -> bool:
-    left_parts = _normalize_write_path(left).split("/")
-    right_parts = _normalize_write_path(right).split("/")
+    normalized_left = _normalize_write_path(left)
+    normalized_right = _normalize_write_path(right)
+    if normalized_left == "." or normalized_right == ".":
+        return True
+    left_parts = normalized_left.split("/")
+    right_parts = normalized_right.split("/")
     shorter = min(len(left_parts), len(right_parts))
     return left_parts[:shorter] == right_parts[:shorter]
 
