@@ -29,3 +29,12 @@ OK
 git diff --check
 通过
 ```
+
+## 审查修复
+
+审查后先把模板测试升级为真实协议测试。RED 显示账本和任务图都不是 JSON-compatible YAML，且五类角色任务缺少统一的逐项输入定位字段。修复后：
+
+- `决策账本.yaml` 可由 `json.loads` 解析，每条记录包含合法 `type`，并通过 `state.validate_ledger`；内容与 `state.create_ledger_record` 生成协议一致。
+- `任务图.yaml` 显式提供 `depends_on`/`blockers`、`currentness`、冲突分析字段、隔离字段、追踪/验收 ID 和绝对任务/输出路径；通过 `validate_dag`、`calculate_frontier` 与 `analyze_task_conflict`。
+- 实施、审查、修复、集成、验收模板均要求逐项填写输入产物绝对路径及版本或基线。
+- 更新后专项测试 8/8、全量测试 116/116 通过。

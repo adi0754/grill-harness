@@ -1,12 +1,25 @@
-tasks:
-  - id: TASK-001
-    status: pending
-    depends_on: []
-    parallel_group: null
-    traces: [REQ-001, DEC-001, CON-001]
-    allowed_paths: []
-    forbidden_paths: []
-    shared_contracts: []
-    git_baseline: ""
-    task_package_path: ""
-    output_path: ""
+{
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "status": "pending",
+      "currentness": "current",
+      "depends_on": [],
+      "blockers": [],
+      "parallel_group": "",
+      "trace_ids": ["REQ-001", "DEC-001", "CON-001"],
+      "acceptance_ids": ["REQ-001", "DEC-001"],
+      "allowed_paths": ["src/feature"],
+      "forbidden_paths": ["secrets"],
+      "write_paths": ["src/feature"],
+      "shared_contracts": [],
+      "migrations": [],
+      "generated_files": [],
+      "git_baseline": "0000000000000000000000000000000000000000",
+      "worktree": "/absolute/worktrees/TASK-001",
+      "branch": "task/TASK-001",
+      "task_package_path": "/absolute/workflow/任务交接/TASK-001-实施任务.md",
+      "output_path": "/absolute/workflow/实施报告/TASK-001.md"
+    }
+  ]
+}

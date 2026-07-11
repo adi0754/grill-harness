@@ -1,4 +1,5 @@
-import re
+import json
+import sys
 import unittest
 from pathlib import Path
 
@@ -6,6 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = ROOT / "skills" / "grill-harness" / "assets" / "templates"
 REFERENCES = ROOT / "skills" / "grill-harness" / "references"
+SCRIPTS = ROOT / "skills" / "grill-harness" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+import state
+import task_graph
 
 
 class TemplateContractTests(unittest.TestCase):
@@ -27,6 +33,9 @@ class TemplateContractTests(unittest.TestCase):
     def read(self, name):
         return (TEMPLATES / name).read_text(encoding="utf-8")
 
+    def load_json_yaml(self, name):
+        return json.loads(self.read(name))
+
     def test_all_focused_templates_and_references_exist(self):
         self.assertEqual({path.name for path in TEMPLATES.glob("*")}, self.TEMPLATE_NAMES)
         for name in (
@@ -40,21 +49,45 @@ class TemplateContractTests(unittest.TestCase):
             self.assertTrue((REFERENCES / name).is_file(), name)
 
     def test_machine_records_use_stable_ascii_ids_and_required_fields(self):
-        ledger = self.read("决策账本.yaml")
-        for prefix in ("REQ", "DEC", "CON", "RISK", "CHG", "TASK", "ISSUE", "EVD"):
-            self.assertRegex(ledger, rf"{prefix}-[0-9]{{3}}")
+        records = self.load_json_yaml("决策账本.yaml")["records"]
+        state.validate_ledger(records)
+        self.assertEqual(
+            records,
+            [state.create_ledger_record(prefix, 1, {"summary": ""}) for prefix in state.LEDGER_RECORD_TYPES],
+        )
         task = self.read("实施任务.md")
         for field in (
-            "角色与目标", "项目工作目录", "Git 基线", "必须读取", "相关需求与决策",
+            "角色与目标", "项目工作目录", "Git 基线", "输入产物", "相关需求与决策",
             "已确认仓库事实", "允许修改范围", "禁止修改范围", "工作步骤",
             "测试与证据", "验收标准", "停止条件", "输出路径", "输出格式",
         ):
             self.assertIn(field, task)
 
+    def test_task_graph_template_is_consumable_by_all_task_graph_apis(self):
+        tasks = self.load_json_yaml("任务图.yaml")["tasks"]
+        required = {
+            "id", "status", "currentness", "depends_on", "blockers", "write_paths",
+            "shared_contracts", "migrations", "generated_files", "worktree", "branch",
+            "acceptance_ids", "git_baseline", "task_package_path", "output_path",
+        }
+        self.assertTrue(required.issubset(tasks[0]))
+        self.assertTrue(task_graph.validate_dag(tasks)["valid"])
+        self.assertEqual(task_graph.calculate_frontier(tasks)["frontier"], ["TASK-001"])
+
+        peer = dict(tasks[0])
+        peer.update({
+            "id": "TASK-002", "write_paths": ["src/peer"],
+            "worktree": "/absolute/worktrees/TASK-002", "branch": "task/TASK-002",
+        })
+        report = task_graph.analyze_task_conflict(tasks[0], peer)
+        self.assertTrue(report["parallel_candidate"])
+        self.assertTrue(report["executable_parallel"])
+
     def test_role_tasks_require_absolute_local_paths_outputs_and_stop_conditions(self):
         for name in ("实施任务.md", "审查任务.md", "修复任务.md", "集成任务.md", "验收任务.md"):
             text = self.read(name)
             self.assertIn("绝对路径", text, name)
+            self.assertIn("输入产物（逐项绝对路径与版本/基线）", text, name)
             self.assertIn("输出路径", text, name)
             self.assertIn("停止条件", text, name)
             self.assertNotIn("完整聊天历史", text.replace("不得读取完整聊天历史", ""), name)

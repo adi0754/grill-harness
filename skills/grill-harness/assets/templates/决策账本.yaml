@@ -1,9 +1,12 @@
-records:
-  - {id: REQ-001, version: 1, summary: ""}
-  - {id: DEC-001, version: 1, summary: ""}
-  - {id: CON-001, version: 1, summary: ""}
-  - {id: RISK-001, version: 1, summary: ""}
-  - {id: CHG-001, version: 1, summary: ""}
-  - {id: TASK-001, version: 1, summary: ""}
-  - {id: ISSUE-001, version: 1, summary: ""}
-  - {id: EVD-001, version: 1, summary: ""}
+{
+  "records": [
+    {"id": "REQ-001", "type": "REQ", "version": 1, "summary": ""},
+    {"id": "DEC-001", "type": "DEC", "version": 1, "summary": ""},
+    {"id": "CON-001", "type": "CON", "version": 1, "summary": ""},
+    {"id": "RISK-001", "type": "RISK", "version": 1, "summary": ""},
+    {"id": "CHG-001", "type": "CHG", "version": 1, "summary": ""},
+    {"id": "TASK-001", "type": "TASK", "version": 1, "summary": ""},
+    {"id": "ISSUE-001", "type": "ISSUE", "version": 1, "summary": ""},
+    {"id": "EVD-001", "type": "EVD", "version": 1, "summary": ""}
+  ]
+}
