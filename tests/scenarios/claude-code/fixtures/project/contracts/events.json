@@ -1,0 +1,6 @@
+{
+  "order.created": {
+    "required": ["id", "total"],
+    "version": 1
+  }
+}

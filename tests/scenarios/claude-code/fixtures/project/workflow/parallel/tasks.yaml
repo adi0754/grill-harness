@@ -1,0 +1,18 @@
+schema_version: 1
+tasks:
+  - id: TASK-001
+    status: pending
+    dependencies: []
+    parallel_group: group-a
+    requirements: [REQ-001]
+    decisions: [DEC-002]
+    allowed_paths: [src/orders.py, contracts/events.json]
+    workspace: shared
+  - id: TASK-002
+    status: pending
+    dependencies: []
+    parallel_group: group-a
+    requirements: [REQ-002]
+    decisions: [DEC-002]
+    allowed_paths: [src/notifications.py, contracts/events.json]
+    workspace: shared

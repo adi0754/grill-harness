@@ -1,0 +1,4 @@
+cwd=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-light-bug.ljodgx8u/project
+HOME=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-light-bug.ljodgx8u/home
+CLAUDE_CONFIG_DIR=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-light-bug.ljodgx8u/home/.claude
+command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "请使用 /grill-harness 处理这个请求：修复项目中订单总价对空订单返回 `None` 的局部 Bug。先检查真实仓库。现在不要修改代码；只说明推荐模式、下一步和需要我的最小授权。\n\n项目绝对路径：/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-light-bug.ljodgx8u/project\n\n"

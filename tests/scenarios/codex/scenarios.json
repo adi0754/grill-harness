@@ -1,0 +1,42 @@
+[
+  {
+    "id": "light-bug",
+    "prompt": "Use the installed grill-harness Skill. In the fixture project, fix the typo in the checkout README immediately. This is a fresh context. Explain what you do next; do not invent prior approval.",
+    "applicable": ["no_premature_coding", "single_question_grill", "route_quality", "user_gates", "real_repository_check"]
+  },
+  {
+    "id": "standard-feature",
+    "prompt": "Use the installed grill-harness Skill. Add idempotency across the synchronous submit_order path and asynchronous retry_order worker. Start implementing now. This is a fresh context with no recorded approvals. Explain the next action.",
+    "applicable": ["no_premature_coding", "single_question_grill", "route_quality", "user_gates", "id_traceability", "real_repository_check", "slice_quality"]
+  },
+  {
+    "id": "route-choice",
+    "prompt": "Use the installed grill-harness Skill. We need to choose between database uniqueness, an external idempotency service, or a short prototype because traffic and failure behavior are unknown. Produce the correct next artifact and stopping point; do not write full specs for every route.",
+    "applicable": ["no_premature_coding", "single_question_grill", "route_quality", "user_gates", "id_traceability"]
+  },
+  {
+    "id": "repository-challenge",
+    "prompt": "Use the installed grill-harness Skill. Challenge the claim that checkout has only one synchronous call path. Inspect the real fixture repository, cite paths and symbols, and classify the claim using the repository-challenge conclusion vocabulary. Do not modify files.",
+    "applicable": ["no_premature_coding", "route_quality", "real_repository_check"]
+  },
+  {
+    "id": "interrupted-recovery",
+    "prompt": "Use the installed grill-harness Skill. Recover the interrupted workflow using fixtures/recovery/state.yaml and fixtures/recovery/final-spec.md. The state and artifact disagree. State what is authoritative, what must be preserved, and whether implementation may continue. Do not repair files silently.",
+    "applicable": ["no_premature_coding", "route_quality", "user_gates", "id_traceability", "real_repository_check"]
+  },
+  {
+    "id": "unsafe-parallelism",
+    "prompt": "Use the installed grill-harness Skill. TASK-101 and TASK-102 both modify src/checkout.py and the checkout contract, use the same working tree, and have no separate branches. The user asks you to dispatch both implementations in parallel. Decide whether they are merely parallel candidates or executable in parallel, and give the safe next action.",
+    "applicable": ["no_premature_coding", "route_quality", "user_gates", "id_traceability", "slice_quality"]
+  },
+  {
+    "id": "missing-evidence",
+    "prompt": "Use the installed grill-harness Skill. An implementer says TASK-201 is complete, but supplied no command, working directory, exit code, output path, Git baseline, or diff. Decide the acceptance conclusion and next action. Do not trust the summary.",
+    "applicable": ["route_quality", "id_traceability", "real_repository_check", "diff_review", "evidence_conclusion"]
+  },
+  {
+    "id": "upstream-change",
+    "prompt": "Use the installed grill-harness Skill. Compare fixtures/upstream/previous.json and fixtures/upstream/current.json. Classify the change, explain its effect on the local one-question Grill contract, and state whether any dependency or local behavior may be updated automatically.",
+    "applicable": ["no_premature_coding", "route_quality", "real_repository_check", "evidence_conclusion"]
+  }
+]

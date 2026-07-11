@@ -1,0 +1,4 @@
+cwd=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-missing-evidence.gpcn80jl/project
+HOME=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-missing-evidence.gpcn80jl/home
+CLAUDE_CONFIG_DIR=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-missing-evidence.gpcn80jl/home/.claude
+command="/opt/homebrew/bin/claude" "-p" "--no-session-persistence" "--output-format" "json" "--permission-mode" "dontAsk" "--allowedTools" "Read,Glob,Grep,Bash,Write,Edit" "--max-budget-usd" "0.25" "读取任务包 `/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-missing-evidence.gpcn80jl/home/.grill-harness/tasks/最终验收任务.md`，检查真实仓库，只执行授权范围，运行要求的验证，并把报告写回任务包指定路径；遇到停止条件立即停止并报告。\n\n"

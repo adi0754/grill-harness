@@ -1,0 +1,4 @@
+HOME=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T//grh-codex.wernwP/home
+CODEX_HOME=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T//grh-codex.wernwP/home/.codex
+GRILL_HARNESS_TEST_ROOT=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T//grh-codex.wernwP/runtime
+fixture=/Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/codex/fixtures

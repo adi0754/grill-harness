@@ -1,0 +1,9 @@
+checked_at=2026-07-11T20:21:36.280078+00:00
+claude=/opt/homebrew/bin/claude
+temporary_root=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-route-choice.bwv6i6it
+isolated_home=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-route-choice.bwv6i6it/home
+isolated_skill=/var/folders/fq/3q0pk3ls7r73j21rbbqgdhx40000gn/T/grh-claude-route-choice.bwv6i6it/home/.claude/skills/grill-harness
+project_read_only=true
+session_persistence=false
+real_grill_harness_touched=false
+credentials_copied=false

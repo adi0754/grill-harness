@@ -1,0 +1,10 @@
+{
+  "current_commit": "fed789",
+  "capabilities": {
+    "grilling": {
+      "content_hash": "new-hash",
+      "behavior_contract": "ask a batch of questions",
+      "observed_tests": "failed"
+    }
+  }
+}

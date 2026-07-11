@@ -1,0 +1,9 @@
+{
+  "checked_commit": "abc123",
+  "capabilities": {
+    "grilling": {
+      "content_hash": "old-hash",
+      "behavior_contract": "ask one question at a time"
+    }
+  }
+}
