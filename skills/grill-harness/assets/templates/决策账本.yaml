@@ -1,0 +1,9 @@
+records:
+  - {id: REQ-001, version: 1, summary: ""}
+  - {id: DEC-001, version: 1, summary: ""}
+  - {id: CON-001, version: 1, summary: ""}
+  - {id: RISK-001, version: 1, summary: ""}
+  - {id: CHG-001, version: 1, summary: ""}
+  - {id: TASK-001, version: 1, summary: ""}
+  - {id: ISSUE-001, version: 1, summary: ""}
+  - {id: EVD-001, version: 1, summary: ""}

@@ -1,0 +1,12 @@
+tasks:
+  - id: TASK-001
+    status: pending
+    depends_on: []
+    parallel_group: null
+    traces: [REQ-001, DEC-001, CON-001]
+    allowed_paths: []
+    forbidden_paths: []
+    shared_contracts: []
+    git_baseline: ""
+    task_package_path: ""
+    output_path: ""
