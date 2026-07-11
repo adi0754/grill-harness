@@ -34,13 +34,13 @@ npx skills remove grill-harness -g -a codex claude-code -y
 
 ## 更新
 
-当前 CLI 顶层帮助已验证以下语法，但为保护现有安装与用户数据，测试未实际执行 `update`：
+当前 CLI 顶层帮助列出以下语法：
 
 ```bash
 npx skills update grill-harness -g
 ```
 
-更新前先备份 `~/.grill-harness/`。安装包与运行时数据分离；隔离更新 fixture 已验证不会覆盖工作流数据。
+真实更新行为未验证。隔离测试实际调用了该命令，但当前 CLI 不追踪本地目录安装，返回 `No installed skills found matching`，没有发生更新。执行真实更新前请先备份 `~/.grill-harness/`。
 
 ## 状态与恢复
 
@@ -67,7 +67,7 @@ python3 "$GRH" upstream-check \
 
 ## 验证状态
 
-安装、目录隔离、只读 CLI、卸载数据保留和本地 update fixture 已验证。运行时行为未验证：隔离 Codex 返回 `401 Unauthorized`，隔离 Claude Code 返回 `Not logged in`，因此未声称模型路由、场景执行或启动提示词通过。其他 Agent 也未做同等级验证。
+安装、目录隔离、只读 CLI和卸载数据保留已验证。真实更新行为未验证。运行时行为未验证：隔离 Codex 返回 `401 Unauthorized`，隔离 Claude Code 返回 `Not logged in`，因此未声称模型路由、场景执行或启动提示词通过。其他 Agent 也未做同等级验证。
 
 ```bash
 tests/integration/test_skills_install.sh

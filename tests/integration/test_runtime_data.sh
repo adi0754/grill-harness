@@ -30,6 +30,24 @@ mkdir -p "$PROJECT"
 printf 'project sentinel\n' >"$PROJECT/README.md"
 project_before=$(shasum -a 256 "$PROJECT/README.md")
 
+status=$(python3 "$INSTALLED_SCRIPTS/grh.py" status --project "$PROJECT")
+grep -Fq '"status": "not_started"' <<<"$status" \
+  || fail "installed status command did not report a fresh project"
+[[ ! -e "$GRILL_HARNESS_TEST_ROOT" ]] || fail "read-only status created runtime data"
+
+WORKFLOW="$TEMP_ROOT/state.yaml"
+printf '%s\n' '{"phases":[{"id":"alignment","status":"pending"}],"artifacts":[],"tasks":[],"evidence":[],"gates":{}}' >"$WORKFLOW"
+reconcile=$(python3 "$INSTALLED_SCRIPTS/grh.py" reconcile --workflow "$WORKFLOW")
+grep -Fq '"valid": true' <<<"$reconcile" \
+  || fail "installed reconcile command rejected a valid workflow"
+
+upstream=$(python3 "$INSTALLED_SCRIPTS/grh.py" upstream-check \
+  --previous "$REPO_ROOT/tests/fixtures/upstream/current.json" \
+  --facts "$REPO_ROOT/tests/fixtures/upstream/current.json" \
+  --checked-at 2026-07-12T00:00:00Z --offline)
+grep -Fq '"actions_performed": false' <<<"$upstream" \
+  || fail "installed upstream-check was not read-only"
+
 PYTHONPATH="$INSTALLED_SCRIPTS" python3 - <<'PY'
 import common
 
@@ -51,11 +69,16 @@ project_after=$(shasum -a 256 "$PROJECT/README.md")
 printf 'workflow-v1\n' >"$GRILL_HARNESS_TEST_ROOT/项目/user-workflow.yaml"
 before=$(shasum -a 256 "$GRILL_HARNESS_TEST_ROOT/项目/user-workflow.yaml")
 
-# Update is deliberately represented by an isolated local fixture: it changes
-# only installed package files and never invokes the real update subcommand.
-printf 'updated installed package\n' >"$HOME/.agents/skills/grill-harness/update-fixture.txt"
+set +e
+update_output=$(npx --yes skills update grill-harness -g -y 2>&1)
+update_status=$?
+set -e
 
 after=$(shasum -a 256 "$GRILL_HARNESS_TEST_ROOT/项目/user-workflow.yaml")
-[[ "$before" == "$after" ]] || fail "isolated update fixture changed user workflow data"
+[[ "$before" == "$after" ]] || fail "isolated update attempt changed user workflow data"
+[[ $update_status == 0 ]] || fail "isolated update probe failed unexpectedly: $update_output"
+grep -Fq 'No installed skills found matching: grill-harness' <<<"$update_output" \
+  || fail "local install unexpectedly became updateable; review the isolation strategy"
 
-printf 'PASS: runtime creation and update isolation\n'
+printf 'PASS: runtime creation isolation\n'
+printf 'SKIP: real update behavior unverified; current CLI does not track local installs\n'

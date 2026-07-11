@@ -43,6 +43,10 @@ for dependency in grilling domain-modeling codebase-design; do
   [[ -f "$HOME/.agents/skills/$dependency/SKILL.md" ]] \
     || fail "isolated dependency install missing: $dependency"
 done
+preflight=$(python3 "$CODEX_SKILL/scripts/grh.py" preflight \
+  --skill-root "$HOME/.agents/skills")
+grep -Fq '"ready": true' <<<"$preflight" \
+  || fail "installed preflight did not verify required dependencies"
 [[ ! -e "$GRILL_HARNESS_TEST_ROOT" ]] || fail "installation created runtime data"
 [[ ! -e "$HOME/.grill-harness" ]] || fail "installation created default runtime data"
 
