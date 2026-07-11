@@ -1,85 +1,46 @@
 ---
 name: grill-harness
-description: [TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]
+description: Use when starting, continuing, checking, or recovering a stateful software-engineering workflow, or when checking changes in its upstream capabilities.
 ---
 
 # Grill Harness
 
-## Overview
+## Core rule
 
-[TODO: 1-2 sentences explaining what this skill enables]
+Route from verified project state, never conversation memory. Bundled scripts are machine authority; references contain stage logic.
 
-## Structuring This Skill
+## Entry protocol
 
-[TODO: Choose the structure that best fits this skill's purpose. Common patterns:
+Before choosing a route:
 
-**1. Workflow-Based** (best for sequential processes)
-- Works well when there are clear step-by-step procedures
-- Example: DOCX skill with "Workflow Decision Tree" -> "Reading" -> "Creating" -> "Editing"
-- Structure: ## Overview -> ## Workflow Decision Tree -> ## Step 1 -> ## Step 2...
+Resolve `<grh>` to the absolute path of `scripts/grh.py`, then use its JSON commands:
 
-**2. Task-Based** (best for tool collections)
-- Works well when the skill offers different operations/capabilities
-- Example: PDF skill with "Quick Start" -> "Merge PDFs" -> "Split PDFs" -> "Extract Text"
-- Structure: ## Overview -> ## Quick Start -> ## Task Category 1 -> ## Task Category 2...
+1. `python3 <grh> identify --project <absolute-project>`
+2. `python3 <grh> preflight [--skill-root <installed-skills-root>]`
+3. `python3 <grh> status --project <absolute-project> [--workflow <state.yaml>]`
+4. When a specific artifact needs checking: `python3 <grh> reconcile --workflow <state.yaml>`
 
-**3. Reference/Guidelines** (best for standards or specifications)
-- Works well for brand guidelines, coding standards, or requirements
-- Example: Brand styling with "Brand Guidelines" -> "Colors" -> "Typography" -> "Features"
-- Structure: ## Overview -> ## Guidelines -> ## Specifications -> ## Usage...
+`status` reconciles present artifacts and checks phase gates before returning `next_eligible_phase`. `not_started` plus start intent takes the start route; absence alone is not recovery. Exit `1` means dependency or reconciliation policy blocked progress; exit `2` means input/I/O failure. On either, stop and report the JSON—never infer success. A prior Agent summary is not gate evidence.
 
-**4. Capabilities-Based** (best for integrated systems)
-- Works well when the skill provides multiple interrelated features
-- Example: Product Management with "Core Capabilities" -> numbered capability list
-- Structure: ## Overview -> ## Core Capabilities -> ### 1. Feature -> ### 2. Feature...
+## Intent routes
 
-Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start with task-based, add workflow for complex operations).
+| User intent | Route |
+|---|---|
+| Start, plan, or shape new work | Load `references/工作流状态机.md` and `references/文档与产物契约.md`; begin at the earliest incomplete pre-implementation phase. |
+| Continue, resume, or “pick up where we left off” | Use reconciled persisted state, then enter only the next phase whose prerequisites pass. Load that phase's references before acting. |
+| Status, progress, or “what is next?” | Read only. Report project/workflow identity, authoritative phase, gate status, conflicts, and next eligible action. |
+| Recover, interrupted, inconsistent, or manually edited workflow | Load `references/工作流状态机.md` and `references/文档与产物契约.md`; preserve conflicting artifacts, stop affected phases, and request the required user decision. Never choose the most complete-looking file as authority. |
+| Check upstream skills or dependencies | Load `references/上游适配契约.md`; run `python3 <grh> upstream-check --previous <manifest> --facts <facts> --checked-at <ISO-8601> [--offline]`. Installation, update, or acceptance requires separate user approval. |
 
-Delete this entire "Structuring This Skill" section when done - it's just guidance.]
+## Reference loading
 
-## [TODO: Replace with the first main section based on chosen structure]
+- Alignment through final-spec approval: `references/工作流状态机.md` and `references/文档与产物契约.md`
+- Task splitting or implementation: `references/角色任务协议.md`
+- Independent assurance or archive: `references/测试与验收.md` and `references/文档与产物契约.md`
+- Local role launch: the matching `references/Codex运行时.md` or `references/Claude-Code运行时.md`
 
-[TODO: Add content here. See examples in existing skills:
-- Code samples for technical skills
-- Decision trees for complex workflows
-- Concrete examples with realistic user requests
-- References to scripts/templates/references as needed]
+Do not copy detailed stage procedures into this router.
 
-## Resources (optional)
+## Product-code gate
 
-Create only the resource directories this skill actually needs. Delete this section if no resources are required.
-
-### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
-
-**Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
-- DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
-
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
-
-**Note:** Scripts may be executed without loading into context, but can still be read by Codex for patching or environment adjustments.
-
-### references/
-Documentation and reference material intended to be loaded into context to inform Codex's process and thinking.
-
-**Examples from other skills:**
-- Product management: `communication.md`, `context_building.md` - detailed workflow guides
-- BigQuery: API reference documentation and query examples
-- Finance: Schema documentation, company policies
-
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Codex should reference while working.
-
-### assets/
-Files not intended to be loaded into context, but rather used within the output Codex produces.
-
-**Examples from other skills:**
-- Brand styling: PowerPoint template files (.pptx), logo files
-- Frontend builder: HTML/React boilerplate project directories
-- Typography: Font files (.ttf, .woff2)
-
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
-
----
-
-**Not every skill requires all three types of resources.**
+Before `final_spec_approval` passes for the exact approved artifact version, do not edit product code, dispatch implementation, or create implementation branches/worktrees. In light mode, the merged gate still requires explicit user authorization recorded against the artifact. Repository inspection and workflow-artifact maintenance remain read-only with respect to product code.
