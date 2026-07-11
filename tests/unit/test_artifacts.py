@@ -108,6 +108,20 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(updated["tasks"][0]["status"], "stale")
         self.assertEqual(updated["evidence"][0]["status"], "stale")
 
+    def test_mutation_entries_reject_duplicate_ids_with_chinese_recovery_guidance(self):
+        workflow = load_fixture("valid_workflow.json")
+        workflow["artifacts"].append(
+            {"id": "spec-v1", "kind": "spec", "status": "completed"}
+        )
+
+        for mutate in (
+            lambda: validate.propagate_superseded(workflow, "spec-v1"),
+            lambda: validate.propagate_decision_change(workflow, "DEC-001"),
+        ):
+            with self.subTest(mutate=mutate):
+                with self.assertRaisesRegex(ValueError, "重复 ID.*确认.*替代关系"):
+                    mutate()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,10 @@ from typing import Any, Dict, Iterable, Mapping, MutableMapping, Set
 import state
 
 
+class ArtifactContractError(ValueError):
+    """Raised before mutation when artifact identity is contradictory."""
+
+
 def _conflict(
     code: str,
     conflict: str,
@@ -30,24 +34,50 @@ def _records_by_id(records: Iterable[Mapping[str, Any]]) -> Dict[str, Mapping[st
     return indexed
 
 
-def _duplicate_id_conflicts(
-    collection_name: str, records: Iterable[Mapping[str, Any]]
+def _identity_conflicts_for_records(
+    collection_name: str,
+    records: Iterable[Mapping[str, Any]],
+    seen: MutableMapping[str, str],
 ) -> list:
     conflicts = []
-    seen = set()
     reported = set()
-    for record in records:
+    for position, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            conflicts.append(
+                _conflict(
+                    "INVALID_ID",
+                    "{} 第 {} 条记录不是可识别的映射，无法确认其 ID。".format(
+                        collection_name, position + 1
+                    ),
+                    "暂停传播，恢复原始记录结构并补齐唯一的非空字符串 ID。",
+                    collection=collection_name,
+                    position=position,
+                )
+            )
+            continue
         record_id = record.get("id")
-        if not isinstance(record_id, str) or record_id not in seen:
-            if isinstance(record_id, str):
-                seen.add(record_id)
+        if not isinstance(record_id, str) or not record_id.strip():
+            conflicts.append(
+                _conflict(
+                    "INVALID_ID",
+                    "{} 第 {} 条记录缺少唯一的非空字符串 ID。".format(
+                        collection_name, position + 1
+                    ),
+                    "暂停传播，确认记录来源并补齐稳定 ID 后重新对账。",
+                    collection=collection_name,
+                    position=position,
+                )
+            )
+            continue
+        if record_id not in seen:
+            seen[record_id] = collection_name
             continue
         if record_id not in reported:
             conflicts.append(
                 _conflict(
                     "DUPLICATE_ID",
-                    "{} 中存在重复 ID {}，后写记录不能覆盖前一条事实。".format(
-                        collection_name, record_id
+                    "{} 中存在重复 ID {}，与 {} 的记录相互矛盾，后写记录不能覆盖前一条事实。".format(
+                        collection_name, record_id, seen[record_id]
                     ),
                     "暂停对账，保留两条原始记录并由用户确认正确版本和替代关系。",
                     collection=collection_name,
@@ -58,16 +88,41 @@ def _duplicate_id_conflicts(
     return conflicts
 
 
+def identity_invariant_conflicts(workflow: Mapping[str, Any]) -> list:
+    """Return the identity contradictions shared by read and mutation paths."""
+
+    conflicts = _identity_conflicts_for_records(
+        "phases", workflow.get("phases", ()), {}
+    )
+    shared_ids = {}
+    for collection_name in ("artifacts", "tasks", "evidence"):
+        conflicts.extend(
+            _identity_conflicts_for_records(
+                collection_name,
+                workflow.get(collection_name, ()),
+                shared_ids,
+            )
+        )
+    return conflicts
+
+
+def _require_identity_invariants(workflow: Mapping[str, Any]) -> None:
+    conflicts = identity_invariant_conflicts(workflow)
+    if conflicts:
+        first = conflicts[0]
+        raise ArtifactContractError(
+            "{} 恢复动作：{}".format(
+                first["conflict"], first["recovery_action"]
+            )
+        )
+
+
 def reconcile_workflow(workflow: Mapping[str, Any]) -> Dict[str, Any]:
     """Report state/artifact contradictions without changing the workflow."""
 
-    conflicts = []
-    for collection_name in ("phases", "artifacts", "tasks", "evidence"):
-        conflicts.extend(
-            _duplicate_id_conflicts(
-                collection_name, workflow.get(collection_name, ())
-            )
-        )
+    conflicts = identity_invariant_conflicts(workflow)
+    if conflicts:
+        return {"valid": False, "conflicts": conflicts}
     artifacts = _records_by_id(workflow.get("artifacts", ()))
     evidence = _records_by_id(workflow.get("evidence", ()))
     for phase in workflow.get("phases", ()):
@@ -150,6 +205,7 @@ def propagate_decision_change(
 ) -> Dict[str, Any]:
     """Copy a workflow and stale every explicitly decision-dependent output."""
 
+    _require_identity_invariants(workflow)
     updated = copy.deepcopy(dict(workflow))
     affected: Set[str] = set()
     for collection_name in ("artifacts", "tasks", "evidence"):
@@ -177,6 +233,7 @@ def propagate_decision_change(
 def propagate_superseded(workflow: Mapping[str, Any], artifact_id: str) -> Dict[str, Any]:
     """Supersede an artifact and stale the transitive closure of its dependents."""
 
+    _require_identity_invariants(workflow)
     updated = copy.deepcopy(dict(workflow))
     artifacts = _records_by_id(updated.get("artifacts", ()))
     target = artifacts.get(artifact_id)
@@ -207,6 +264,8 @@ mark_decision_dependents_stale = propagate_decision_change
 
 
 __all__ = [
+    "ArtifactContractError",
+    "identity_invariant_conflicts",
     "mark_decision_dependents_stale",
     "propagate_decision_change",
     "propagate_superseded",
