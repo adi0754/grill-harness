@@ -1,6 +1,7 @@
 """Pure validation and reconciliation for Grill Harness workflow artifacts."""
 
 import copy
+import os
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Set
 
 import state
@@ -257,6 +258,159 @@ def propagate_superseded(workflow: Mapping[str, Any], artifact_id: str) -> Dict[
     return updated
 
 
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _id_list(value: Any) -> bool:
+    return isinstance(value, list) and all(_nonempty_string(item) for item in value)
+
+
+def validate_evidence(
+    evidence: Mapping[str, Any], current_baseline: str = None
+) -> Dict[str, Any]:
+    """Validate whether one evidence record can support a completion claim."""
+
+    conflicts = []
+    evidence_id = evidence.get("id", "<unknown>")
+    if not _nonempty_string(evidence.get("id")):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_ID",
+                "证据记录缺少稳定的非空 ID，无法建立追踪关系。",
+                "分配唯一 EVD ID，并重新关联需求、决策和任务。",
+                evidence_id=evidence_id,
+            )
+        )
+    if not _nonempty_string(evidence.get("command")):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_COMMAND",
+                "证据 {} 缺少实际执行的非空命令。".format(evidence_id),
+                "在目标环境重新运行验证，并记录未经改写的实际命令。",
+                evidence_id=evidence_id,
+            )
+        )
+    working_directory = evidence.get("working_directory")
+    if not _nonempty_string(working_directory) or not os.path.isabs(working_directory):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_WORKING_DIRECTORY",
+                "证据 {} 缺少实际工作目录。".format(evidence_id),
+                "记录验证命令执行时的真实绝对工作目录后重新验收。",
+                evidence_id=evidence_id,
+            )
+        )
+    exit_code = evidence.get("exit_code")
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code != 0:
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_EXIT_CODE",
+                "证据 {} 的退出码不是整数 0，不能证明验证通过。".format(evidence_id),
+                "修复失败并重新执行命令；保留原失败证据但不要用于通过结论。",
+                evidence_id=evidence_id,
+                exit_code=exit_code,
+            )
+        )
+    baseline = evidence.get("baseline")
+    if (
+        not _nonempty_string(baseline)
+        or not _nonempty_string(current_baseline)
+        or baseline != current_baseline
+    ):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_BASELINE",
+                "证据 {} 的 Git 基线缺失或与当前仓库不一致。".format(evidence_id),
+                "在当前基线重新运行验证并登记新的证据记录。",
+                evidence_id=evidence_id,
+                evidence_baseline=baseline,
+                current_baseline=current_baseline,
+            )
+        )
+    if not _nonempty_string(evidence.get("producer")):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_PRODUCER",
+                "证据 {} 未记录真实产生者。".format(evidence_id),
+                "记录执行验证的角色或 Agent 身份，并重新确认来源。",
+                evidence_id=evidence_id,
+            )
+        )
+    if evidence.get("reproducible") is not True:
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_REPRODUCIBILITY",
+                "证据 {} 未证明可以复现。".format(evidence_id),
+                "补齐可重复执行的命令、环境和输入后重新验证。",
+                evidence_id=evidence_id,
+            )
+        )
+    trace_fields = ("requirements", "decisions", "tasks", "issues")
+    trace_values = [evidence.get(field) for field in trace_fields]
+    if (
+        any(not _id_list(value) for value in trace_values)
+        or not any(value for value in trace_values if isinstance(value, list))
+    ):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_TRACEABILITY",
+                "证据 {} 缺少有效的需求、决策、任务或问题关联。".format(evidence_id),
+                "使用字符串 ID 列表记录关联对象，并至少关联一项后重新验收。",
+                evidence_id=evidence_id,
+            )
+        )
+    if not _nonempty_string(evidence.get("executed_at")):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_EXECUTED_AT",
+                "证据 {} 缺少实际执行时间。".format(evidence_id),
+                "记录带时区的真实执行时间，并在证据过期时重新运行。",
+                evidence_id=evidence_id,
+            )
+        )
+    output_path = evidence.get("output_path")
+    if not _nonempty_string(output_path) or not os.path.isabs(output_path):
+        conflicts.append(
+            _conflict(
+                "EVIDENCE_OUTPUT_PATH",
+                "证据 {} 缺少原始输出的绝对路径。".format(evidence_id),
+                "保存原始输出并记录可定位的绝对路径，不要只复制摘要。",
+                evidence_id=evidence_id,
+            )
+        )
+    if (
+        evidence.get("status") != "valid"
+        or evidence.get("currentness") != "current"
+        or bool(evidence.get("stale_because"))
+    ):
+        conflicts.append(
+            _conflict(
+                "STALE_EVIDENCE",
+                "证据 {} 已过期或当前状态无效。".format(evidence_id),
+                "按当前代码、规格和 Git 基线重新执行验证并登记新证据。",
+                evidence_id=evidence_id,
+                status=evidence.get("status"),
+                currentness=evidence.get("currentness"),
+            )
+        )
+    return {"valid": not conflicts, "conflicts": conflicts}
+
+
+def validate_evidence_records(
+    records: Iterable[Mapping[str, Any]], current_baseline: str = None
+) -> Dict[str, Any]:
+    """Validate a collection without hiding which evidence record failed."""
+
+    reports = []
+    conflicts = []
+    for evidence in records:
+        report = validate_evidence(evidence, current_baseline=current_baseline)
+        reports.append({"evidence_id": evidence.get("id"), **report})
+        conflicts.extend(report["conflicts"])
+    return {"valid": not conflicts, "reports": reports, "conflicts": conflicts}
+
+
 validate_artifacts = reconcile_workflow
 reconcile_artifacts = reconcile_workflow
 reconcile = reconcile_workflow
@@ -273,4 +427,6 @@ __all__ = [
     "reconcile_artifacts",
     "reconcile_workflow",
     "validate_artifacts",
+    "validate_evidence",
+    "validate_evidence_records",
 ]
