@@ -125,13 +125,20 @@ def _safe_top_level_help(runner):
 def _batch_command(help_text, capabilities):
     if not help_text or not capabilities:
         return None
-    if "add <source>" not in help_text or "--skill" not in help_text:
+    has_add_source = re.search(r"(?m)^\s*add\s+<(?:source|package)>(?=\s|$)", help_text)
+    if not has_add_source or "--skill" not in help_text:
         return None
     return "npx skills add mattpocock/skills --skill {}".format(" ".join(capabilities))
 
 
 def _update_command(help_text, capabilities):
-    if not help_text or not capabilities or "update <skills...>" not in help_text:
+    if not help_text or not capabilities:
+        return None
+    update_line = re.search(
+        r"(?m)^\s*update\s+(?:\[(?:skills(?:\.\.\.)?)\]|<(?:skills(?:\.\.\.)?)>|skills(?:\.\.\.)?)(?=\s|$)",
+        help_text,
+    )
+    if not update_line:
         return None
     return "npx skills update {} -g".format(" ".join(capabilities))
 

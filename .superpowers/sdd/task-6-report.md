@@ -35,6 +35,7 @@ RED 精确暴露以下问题：
 - 上游比较可同时报告 `added`、`removed`、`renamed`、`content-fix`、`content-change`、`metadata-change` 和 `behavior-contract-change`，并比较 commit 与对应路径 hash。
 - update 建议与 install 建议语义分离：前者由安全顶层 help 验证后生成 `npx skills update ... -g`，绝不复用 add 命令，也不执行该建议。
 - `upstream_updated_at` 是固定清单的非空必需时间戳；缺失或空值均失败关闭。
+- 顶层 help 解析 fixture 来自本机 `npx skills --help` 的真实片段，支持当前 `update [skills...]`，同时兼容方括号、尖括号和无括号的 skills 占位写法；探测仍只读取顶层 help。
 
 ## 不变式
 

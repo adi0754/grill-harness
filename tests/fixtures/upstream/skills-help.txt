@@ -1,0 +1,13 @@
+Usage: skills <command> [options]
+
+Manage Skills:
+  add <package>        Add a skill package (alias: a)
+
+Updates:
+  update [skills...]   Update skills to latest versions (alias: upgrade)
+
+Update Options:
+  -g, --global           Update global skills only
+
+Add Options:
+  -s, --skill <skills>   Specify skill names to install (use '*' for all skills)

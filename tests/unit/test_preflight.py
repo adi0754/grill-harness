@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "skills" / "grill-harness" / "scripts"
+FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "upstream"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import preflight
@@ -39,7 +40,7 @@ class PreflightTests(unittest.TestCase):
             ("npx", "skills", "list", "-g", "--json"): {"returncode": 0, "stdout": json.dumps(global_payload)},
             ("npx", "skills", "--help"): {
                 "returncode": 0,
-                "stdout": "Usage: skills <command>\n  add <source> --skill <skills...>\n  update <skills...> [-g]\n",
+                "stdout": (FIXTURES / "skills-help.txt").read_text(encoding="utf-8"),
             },
         }
 
@@ -183,6 +184,23 @@ class PreflightTests(unittest.TestCase):
 
             grilling = next(item for item in report["capabilities"] if item["name"] == "grilling")
             self.assertFalse(grilling["verified"])
+
+    def test_real_top_level_help_bracket_syntax_enables_safe_update_guidance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = []
+            for name in preflight.REQUIRED_CAPABILITIES:
+                path = self._skill(root, name)
+                entries.append({"name": name, "path": str(path)})
+            runner = FakeRunner(self._safe_cli_responses({"skills": entries}, {"skills": []}))
+
+            report = preflight.run_preflight(runner=runner)
+
+            self.assertEqual(
+                report["update_commands"],
+                ["npx skills update grilling domain-modeling codebase-design -g"],
+            )
+            self.assertFalse(any(call[2:3] in (["add"], ["update"]) for call in runner.calls))
 
 
 if __name__ == "__main__":
