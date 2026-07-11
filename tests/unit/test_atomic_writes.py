@@ -1,3 +1,4 @@
+import errno
 import sys
 import tempfile
 import unittest
@@ -37,6 +38,45 @@ class AtomicWriteTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "interrupted"):
                     common.atomic_write_yaml(destination, {"version": 2})
 
+            self.assertEqual(destination.read_bytes(), previous_bytes)
+            self.assertEqual(list(Path(temp_dir).glob(".state.yaml.*.tmp")), [])
+
+    def test_write_rejects_non_finite_json_numbers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "state.yaml"
+
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(value=value):
+                    with self.assertRaises(ValueError):
+                        common.atomic_write_yaml(destination, {"value": value})
+
+            self.assertFalse(destination.exists())
+
+    def test_read_rejects_non_finite_json_constants(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "state.yaml"
+
+            for constant in ("NaN", "Infinity", "-Infinity"):
+                with self.subTest(constant=constant):
+                    source.write_text(
+                        '{{"value": {}}}'.format(constant),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        common.read_yaml(source)
+
+    def test_fsync_io_error_is_propagated_without_replacing_destination(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "state.yaml"
+            common.atomic_write_yaml(destination, {"version": 1})
+            previous_bytes = destination.read_bytes()
+            error = OSError(errno.EIO, "durability failure")
+
+            with mock.patch.object(common.os, "fsync", side_effect=error):
+                with self.assertRaises(OSError) as raised:
+                    common.atomic_write_yaml(destination, {"version": 2})
+
+            self.assertEqual(raised.exception.errno, errno.EIO)
             self.assertEqual(destination.read_bytes(), previous_bytes)
             self.assertEqual(list(Path(temp_dir).glob(".state.yaml.*.tmp")), [])
 

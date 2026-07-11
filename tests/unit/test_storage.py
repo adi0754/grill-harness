@@ -35,12 +35,30 @@ class StorageRootTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as test_root:
             paths = common.ensure_storage_layout(Path(test_root))
 
-            self.assertEqual(set(paths), {"projects", "workflows", "backups"})
+            self.assertEqual(
+                set(paths),
+                {"config", "upstream", "projects", "templates", "logs"},
+            )
             self.assertEqual(
                 {path.name for path in paths.values()},
-                {"项目", "工作流", "备份"},
+                {"配置", "上游管理", "项目", "模板", "日志"},
             )
             self.assertTrue(all(path.is_dir() for path in paths.values()))
+            self.assertFalse((Path(test_root) / "工作流").exists())
+
+    def test_workflow_directory_is_created_inside_a_project(self):
+        with tempfile.TemporaryDirectory() as test_root:
+            project_directory = Path(test_root) / "项目" / "示例-a1b2c3d4"
+            create_layout = getattr(common, "ensure_project_layout", None)
+
+            self.assertTrue(callable(create_layout))
+            paths = create_layout(project_directory)
+
+            self.assertEqual(
+                paths,
+                {"workflows": project_directory.resolve() / "工作流"},
+            )
+            self.assertTrue(paths["workflows"].is_dir())
 
     def test_destructive_schema_migration_gets_a_backup_first(self):
         with tempfile.TemporaryDirectory() as test_root:

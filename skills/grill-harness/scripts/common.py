@@ -1,5 +1,6 @@
 """Shared storage primitives for Grill Harness."""
 
+import errno
 import json
 import os
 import shutil
@@ -14,9 +15,11 @@ TEST_STORAGE_ROOT_ENV = "GRILL_HARNESS_TEST_ROOT"
 TEST_ROOT_ENV = TEST_STORAGE_ROOT_ENV
 
 STORAGE_DIRECTORIES = {
+    "config": "配置",
+    "upstream": "上游管理",
     "projects": "项目",
-    "workflows": "工作流",
-    "backups": "备份",
+    "templates": "模板",
+    "logs": "日志",
 }
 
 
@@ -54,6 +57,19 @@ def ensure_storage_layout(root: Optional[Path] = None) -> Dict[str, Path]:
 initialize_storage = ensure_storage_layout
 
 
+def ensure_project_layout(project_directory: Path) -> Dict[str, Path]:
+    """Create storage that belongs to one identified project."""
+
+    project_root = Path(project_directory).expanduser().resolve()
+    workflows = project_root / "工作流"
+    workflows.mkdir(parents=True, exist_ok=True)
+    return {"workflows": workflows}
+
+
+def _reject_non_finite_json(value: str) -> None:
+    raise ValueError("non-finite JSON number is not supported: {}".format(value))
+
+
 def read_yaml(path: Path, default: Any = None) -> Any:
     """Read JSON-compatible YAML.
 
@@ -65,10 +81,26 @@ def read_yaml(path: Path, default: Any = None) -> Any:
     if not source.exists():
         return default
     with source.open("r", encoding="utf-8") as stream:
-        return json.load(stream)
+        return json.load(stream, parse_constant=_reject_non_finite_json)
 
 
 load_yaml = read_yaml
+
+
+_UNSUPPORTED_FSYNC_ERRNOS = {
+    errno.EINVAL,
+    getattr(errno, "ENOTSUP", errno.EINVAL),
+    getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+    getattr(errno, "ENOSYS", errno.EINVAL),
+}
+
+
+def _fsync(descriptor: int) -> None:
+    try:
+        os.fsync(descriptor)
+    except OSError as error:
+        if error.errno not in _UNSUPPORTED_FSYNC_ERRNOS:
+            raise
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -76,10 +108,10 @@ def _fsync_directory(directory: Path) -> None:
     descriptor = None
     try:
         descriptor = os.open(str(directory), flags)
-        os.fsync(descriptor)
-    except (AttributeError, OSError):
-        # Directory fsync is not supported on every platform/filesystem.
-        pass
+        _fsync(descriptor)
+    except OSError as error:
+        if error.errno not in _UNSUPPORTED_FSYNC_ERRNOS:
+            raise
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -94,6 +126,7 @@ def atomic_write_yaml(path: Path, data: Any) -> None:
         indent=2,
         sort_keys=True,
         separators=(",", ": "),
+        allow_nan=False,
     ) + "\n"
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -110,10 +143,7 @@ def atomic_write_yaml(path: Path, data: Any) -> None:
             temporary_path = Path(stream.name)
             stream.write(serialized)
             stream.flush()
-            try:
-                os.fsync(stream.fileno())
-            except OSError:
-                pass
+            _fsync(stream.fileno())
         os.replace(str(temporary_path), str(destination))
         temporary_path = None
         _fsync_directory(destination.parent)
@@ -149,10 +179,7 @@ def backup_before_schema_migration(
     )
     shutil.copy2(str(source), str(backup))
     with backup.open("rb") as stream:
-        try:
-            os.fsync(stream.fileno())
-        except OSError:
-            pass
+        _fsync(stream.fileno())
     _fsync_directory(destination_directory)
     return backup
 
@@ -168,6 +195,7 @@ __all__ = [
     "backup_before_schema_migration",
     "backup_file",
     "ensure_storage_layout",
+    "ensure_project_layout",
     "get_storage_root",
     "initialize_storage",
     "load_yaml",

@@ -2,11 +2,13 @@
 
 import hashlib
 import json
+import ntpath
 import os
 import re
 import subprocess
 import uuid
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlsplit
@@ -26,15 +28,32 @@ class ProjectIdentity:
     relocation_candidates: Tuple[str, ...]
 
 
+def _looks_like_windows_path(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z]:[\\/]", value)) or value.startswith("\\\\")
+
+
 def normalize_project_path(path: Path) -> str:
+    raw_path = os.fspath(path)
+    if _looks_like_windows_path(raw_path):
+        return ntpath.normcase(ntpath.normpath(raw_path))
     resolved = Path(path).expanduser().resolve()
     return os.path.normcase(os.path.normpath(str(resolved)))
 
 
-def normalize_git_remote(remote: Optional[str]) -> Optional[str]:
+def normalize_git_remote(
+    remote: Optional[str],
+    repository_root: Optional[Path] = None,
+) -> Optional[str]:
     if not remote or not remote.strip():
         return None
     value = remote.strip()
+    if _looks_like_windows_path(value):
+        normalized_path = normalize_project_path(value)
+        if normalized_path.startswith("\\\\"):
+            return "file://{}".format(
+                normalized_path.lstrip("\\").replace("\\", "/")
+            )
+        return "file://{}".format(normalized_path)
     scp_match = re.match(r"^(?:[^@/]+@)?([^:/]+):(.+)$", value)
     if scp_match and "://" not in value:
         host = scp_match.group(1).lower()
@@ -46,9 +65,22 @@ def normalize_git_remote(remote: Optional[str]) -> Optional[str]:
         host = (parsed.hostname or "").lower()
         return _clean_remote_path(host, unquote(parsed.path))
     if parsed.scheme == "file":
-        return "file://{}".format(normalize_project_path(Path(unquote(parsed.path))))
+        file_path = unquote(parsed.path)
+        if parsed.netloc:
+            server = (parsed.hostname or parsed.netloc).lower()
+            if server == "localhost":
+                if re.match(r"^/[A-Za-z]:[\\/]", file_path):
+                    file_path = file_path[1:]
+                return "file://{}".format(normalize_project_path(file_path))
+            return "file://{}/{}".format(server, file_path.strip("/").lower())
+        if re.match(r"^/[A-Za-z]:[\\/]", file_path):
+            file_path = file_path[1:]
+        return "file://{}".format(normalize_project_path(file_path))
 
-    return "file://{}".format(normalize_project_path(Path(value)))
+    local_path = Path(value).expanduser()
+    if not local_path.is_absolute() and repository_root is not None:
+        local_path = Path(repository_root) / local_path
+    return "file://{}".format(normalize_project_path(local_path))
 
 
 def _clean_remote_path(host: str, repository_path: str) -> str:
@@ -93,11 +125,11 @@ def _git_facts(path: Path) -> Optional[Dict[str, Any]]:
         if remotes:
             first_remote = sorted(remotes.splitlines())[0]
             remote = _run_git(Path(root), "remote", "get-url", first_remote)
-    history = _run_git(Path(root), "rev-list", "--max-parents=0", "HEAD")
+    history = _run_git(Path(root), "rev-list", "--max-parents=0", "--all")
     history_roots = tuple(sorted(history.splitlines())) if history else ()
     return {
         "path": normalized_root,
-        "remote": normalize_git_remote(remote),
+        "remote": normalize_git_remote(remote, Path(root)),
         "history_roots": history_roots,
     }
 
@@ -137,11 +169,16 @@ def _relocation_candidates(fingerprint: Dict[str, Any]) -> Tuple[str, ...]:
 
 
 def _safe_slug(value: str, fallback: str = "项目") -> str:
-    value = re.sub(r"[\\/\x00-\x1f\x7f]+", "-", value.strip())
+    value = re.sub(r"[<>:\"/\\|?*\x00-\x1f\x7f]+", "-", value.strip())
     value = re.sub(r"\s+", "-", value)
     value = re.sub(r"-+", "-", value).strip("-. ")
     if not value or value in {".", ".."}:
         value = fallback
+    reserved_names = {"CON", "PRN", "AUX", "NUL"}
+    reserved_names.update("COM{}".format(number) for number in range(1, 10))
+    reserved_names.update("LPT{}".format(number) for number in range(1, 10))
+    if value.split(".", 1)[0].upper() in reserved_names:
+        value = "_{}".format(value)
     return value[:64]
 
 
@@ -149,10 +186,14 @@ def identify_project(path: Path) -> ProjectIdentity:
     fingerprint = project_fingerprint(Path(path))
     identifier = project_id(fingerprint)
     normalized_path = fingerprint["path"]
-    name = Path(normalized_path).name
+    name = (
+        ntpath.basename(normalized_path)
+        if _looks_like_windows_path(normalized_path)
+        else Path(normalized_path).name
+    )
     return ProjectIdentity(
         project_id=identifier,
-        directory_name="{}--{}".format(_safe_slug(name), identifier[:8]),
+        directory_name="{}-{}".format(_safe_slug(name), identifier[:8]),
         normalized_path=normalized_path,
         is_git=fingerprint["kind"] == "git",
         normalized_remote=fingerprint.get("remote"),
@@ -175,9 +216,19 @@ def workflow_directory_name(
     workflow_name: str,
     project_identifier: str,
     workflow_key: str,
+    created_on: Optional[date] = None,
 ) -> str:
     identifier = workflow_id(project_identifier, workflow_key)
-    return "{}--{}".format(_safe_slug(workflow_name, "工作流"), identifier[:8])
+    workflow_date = date.today() if created_on is None else created_on
+    if isinstance(workflow_date, date):
+        date_segment = workflow_date.isoformat()
+    else:
+        date_segment = str(workflow_date)
+    return "{}-{}-{}".format(
+        _safe_slug(date_segment, "日期"),
+        _safe_slug(workflow_name, "工作流"),
+        identifier[:8],
+    )
 
 
 __all__ = [
