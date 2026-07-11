@@ -20,7 +20,10 @@ def _metadata_name(skill_file):
         text = skill_file.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return None
-    match = re.search(r"(?m)^name:\s*['\"]?([^'\"\n]+)", text)
+    frontmatter = re.match(r"\A---\s*\n(.*?)\n---(?:\s*\n|\Z)", text, re.DOTALL)
+    if not frontmatter:
+        return None
+    match = re.search(r"(?m)^name:\s*['\"]?([^'\"\n]+)", frontmatter.group(1))
     return match.group(1).strip() if match else None
 
 
@@ -37,28 +40,40 @@ def _entries(payload):
 
 
 def _cli_inventory(runner):
-    try:
-        response = runner(["npx", "skills", "list", "--json"])
-    except (FileNotFoundError, OSError) as error:
-        return False, [], str(error)
-    if response.get("returncode") != 0:
-        return False, [], response.get("stderr", "skills CLI failed")
-    try:
-        payload = json.loads(response.get("stdout", ""))
-    except (TypeError, json.JSONDecodeError) as error:
-        return False, [], "invalid CLI JSON: {}".format(error)
-    return True, _entries(payload), None
+    inventory = []
+    commands = (
+        (["npx", "skills", "list", "--json"], "project"),
+        (["npx", "skills", "list", "-g", "--json"], "global"),
+    )
+    for command, scope in commands:
+        try:
+            response = runner(command)
+        except (FileNotFoundError, OSError) as error:
+            return False, [], str(error)
+        if not response or response.get("returncode") != 0:
+            return False, [], (response or {}).get("stderr", "skills CLI failed")
+        try:
+            payload = json.loads(response.get("stdout", ""))
+        except (TypeError, json.JSONDecodeError) as error:
+            return False, [], "invalid CLI JSON: {}".format(error)
+        for entry in _entries(payload):
+            normalized = dict(entry)
+            normalized["scope"] = scope
+            inventory.append(normalized)
+    return True, inventory, None
 
 
 def _filesystem_inventory(roots):
     entries = []
-    for root in roots:
-        root = Path(root)
-        if not root.is_dir():
-            continue
-        for child in sorted(root.iterdir(), key=lambda item: item.name):
-            if child.is_dir() and (child / "SKILL.md").is_file():
-                entries.append({"name": child.name, "path": str(child), "scope": "filesystem"})
+    scoped_roots = roots if isinstance(roots, dict) else {"unknown": roots}
+    for scope, paths in scoped_roots.items():
+        for root in paths:
+            root = Path(root)
+            if not root.is_dir():
+                continue
+            for child in sorted(root.iterdir(), key=lambda item: item.name):
+                if child.is_dir() and (child / "SKILL.md").is_file():
+                    entries.append({"name": child.name, "path": str(child), "scope": scope})
     return entries
 
 
@@ -97,25 +112,22 @@ def _verify(name, candidates):
     }
 
 
-def _usage(runner, operation):
+def _safe_top_level_help(runner):
     try:
-        response = runner(["npx", "skills", operation, "--help"])
+        response = runner(["npx", "skills", "--help"])
     except (FileNotFoundError, OSError):
         return None
-    if response.get("returncode") != 0:
+    if not response or response.get("returncode") != 0:
         return None
-    for line in response.get("stdout", "").splitlines():
-        if line.strip().lower().startswith("usage:"):
-            return line.split(":", 1)[1].strip()
-    return None
+    return response.get("stdout", "")
 
 
-def _command_from_usage(usage, capability):
-    if not usage:
+def _batch_command(help_text, capabilities):
+    if not help_text or not capabilities:
         return None
-    tokens = usage.split()
-    executable = tokens[:2] if len(tokens) >= 2 else tokens
-    return "npx {} {}".format(" ".join(executable), capability)
+    if "add <source>" not in help_text or "--skill" not in help_text:
+        return None
+    return "npx skills add mattpocock/skills --skill {}".format(" ".join(capabilities))
 
 
 def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
@@ -123,8 +135,7 @@ def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
 
     runner = _default_runner if runner is None else runner
     cli_available, cli_entries, cli_error = _cli_inventory(runner)
-    fs_entries = _filesystem_inventory(skill_roots)
-    inventory = cli_entries + fs_entries
+    inventory = cli_entries if cli_available else _filesystem_inventory(skill_roots)
     names = list(REQUIRED_CAPABILITIES) + list(optional_capabilities) + list(COMPATIBILITY_REFERENCES)
     capabilities = []
     for name in names:
@@ -145,10 +156,9 @@ def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
     install_commands = []
     update_commands = []
     if cli_available:
-        add_usage = _usage(runner, "add")
-        update_usage = _usage(runner, "update")
-        install_commands = [command for command in (_command_from_usage(add_usage, name) for name in missing_required) if command]
-        update_commands = [command for command in (_command_from_usage(update_usage, name) for name in REQUIRED_CAPABILITIES) if command]
+        command = _batch_command(_safe_top_level_help(runner), missing_required)
+        install_commands = [command] if command else []
+        update_commands = list(install_commands)
     return {
         "ready": not missing_required,
         "cli": {"available": cli_available, "error": cli_error, "inventory_source": "json-first"},
@@ -158,6 +168,7 @@ def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
         "install_commands": install_commands,
         "update_commands": update_commands,
         "actions_performed": False,
+        "accepted_upstream_changes": False,
     }
 
 

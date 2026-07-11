@@ -29,6 +29,20 @@ class UpstreamCheckTests(unittest.TestCase):
         self.assertEqual(manifest["commit"], "abc123")
         self.assertEqual(manifest["hashes"]["skills/grilling/SKILL.md"], "hash-grilling-v1")
 
+    def test_manifest_rejects_missing_or_incomplete_audit_facts(self):
+        required_failures = (
+            {},
+            dict(self._fixture("current.json"), repository=""),
+            dict(self._fixture("current.json"), sources={"grilling": {"path": "x"}}),
+            dict(self._fixture("current.json"), behavior_contracts={}),
+            dict(self._fixture("current.json"), last_test_results={}),
+        )
+
+        for facts in required_failures:
+            with self.subTest(facts=facts):
+                with self.assertRaises(ValueError):
+                    upstream_check.build_manifest(facts, checked_at="2026-07-12T00:00:00Z")
+
     def test_offline_mode_compares_local_facts_without_remote_or_mutation(self):
         previous = upstream_check.build_manifest(self._fixture("current.json"), "2026-07-11T00:00:00Z")
         calls = []
@@ -52,7 +66,7 @@ class UpstreamCheckTests(unittest.TestCase):
             checked_at="2026-07-12T00:00:00Z"
         )
 
-        change = next(item for item in report["changes"] if item["classification"] == "renamed-or-deleted")
+        change = next(item for item in report["changes"] if item["classification"] == "renamed")
         self.assertEqual(change["old_path"], "skills/grilling/SKILL.md")
         self.assertEqual(change["new_path"], "skills/grill/SKILL.md")
         self.assertEqual(report["recommendation"], "人工决策")
@@ -90,6 +104,40 @@ class UpstreamCheckTests(unittest.TestCase):
         contract = manifest["behavior_contracts"]["grill-with-docs"]
         self.assertEqual(contract["role"], "compatibility-reference")
         self.assertFalse(contract["callable_dependency"])
+
+    def test_missing_remote_facts_downgrades_online_check_to_unavailable(self):
+        previous = upstream_check.build_manifest(self._fixture("current.json"), "2026-07-11T00:00:00Z")
+
+        report = upstream_check.check_upstream(
+            previous, local_facts=self._fixture("current.json"), offline=False,
+            remote_loader=lambda: None, checked_at="2026-07-12T00:00:00Z"
+        )
+
+        self.assertEqual(report["mode"], "unavailable")
+        self.assertFalse(report["actions_performed"])
+        self.assertFalse(report["accepted_upstream_changes"])
+
+    def test_added_removed_renamed_hash_contract_and_commit_changes_are_all_reported(self):
+        previous = upstream_check.build_manifest(self._fixture("current.json"), "2026-07-11T00:00:00Z")
+        changed = self._fixture("behavior_changed.json")
+        changed["sources"]["grilling"]["path"] = "skills/grill/SKILL.md"
+        changed["sources"].pop("domain-modeling")
+        changed["behavior_contracts"].pop("domain-modeling")
+        changed["sources"]["new-capability"] = {"path": "skills/new/SKILL.md", "hash": "new-hash"}
+        changed["behavior_contracts"]["new-capability"] = {"summary": "new behavior"}
+
+        report = upstream_check.check_upstream(
+            previous, local_facts=changed, offline=True, checked_at="2026-07-12T00:00:00Z"
+        )
+
+        classifications = [item["classification"] for item in report["changes"]]
+        self.assertIn("added", classifications)
+        self.assertIn("removed", classifications)
+        self.assertIn("renamed", classifications)
+        self.assertIn("content-change", classifications)
+        self.assertIn("behavior-contract-change", classifications)
+        metadata = next(item for item in report["changes"] if item["classification"] == "metadata-change")
+        self.assertIn("commit", metadata["fields"])
 
 
 if __name__ == "__main__":

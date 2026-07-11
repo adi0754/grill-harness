@@ -33,28 +33,36 @@ class PreflightTests(unittest.TestCase):
         )
         return path
 
+    def _safe_cli_responses(self, project_payload, global_payload):
+        return {
+            ("npx", "skills", "list", "--json"): {"returncode": 0, "stdout": json.dumps(project_payload)},
+            ("npx", "skills", "list", "-g", "--json"): {"returncode": 0, "stdout": json.dumps(global_payload)},
+            ("npx", "skills", "--help"): {
+                "returncode": 0,
+                "stdout": "Usage: skills <command>\n  add <source> --skill <skills...>\n",
+            },
+        }
+
     def test_cli_json_is_consulted_first_then_global_and_project_paths_are_verified(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             global_skill = self._skill(root / "global", "grilling")
             project_skill = self._skill(root / "project", "domain-modeling")
             codebase_skill = self._skill(root / "global", "codebase-design")
-            payload = {"skills": [
-                {"name": "domain-modeling", "path": str(project_skill), "scope": "project"},
-                {"name": "grilling", "path": str(global_skill), "scope": "global"},
-                {"name": "codebase-design", "path": str(codebase_skill), "scope": "global"},
-            ]}
-            runner = FakeRunner({
-                ("npx", "skills", "list", "--json"): {"returncode": 0, "stdout": json.dumps(payload)},
-                ("npx", "skills", "add", "--help"): {"returncode": 0, "stdout": "Usage: skills add <source> [--global]"},
-                ("npx", "skills", "update", "--help"): {"returncode": 0, "stdout": "Usage: skills update [name]"},
-            })
+            runner = FakeRunner(self._safe_cli_responses(
+                {"skills": [{"name": "domain-modeling", "path": str(project_skill)}]},
+                {"skills": [
+                    {"name": "grilling", "path": str(global_skill)},
+                    {"name": "codebase-design", "path": str(codebase_skill)},
+                ]},
+            ))
 
             report = preflight.run_preflight(
                 skill_roots=[root / "global", root / "project"], runner=runner
             )
 
             self.assertEqual(runner.calls[0], ["npx", "skills", "list", "--json"])
+            self.assertEqual(runner.calls[1], ["npx", "skills", "list", "-g", "--json"])
             self.assertTrue(report["ready"])
             self.assertEqual(report["missing_required"], [])
             by_name = {item["name"]: item for item in report["capabilities"]}
@@ -71,15 +79,11 @@ class PreflightTests(unittest.TestCase):
             (install_root / "grilling").symlink_to(target, target_is_directory=True)
             bad = self._skill(install_root, "domain-modeling", metadata_name="wrong-name")
             self._skill(install_root, "codebase-design")
-            runner = FakeRunner({
-                ("npx", "skills", "list", "--json"): {"returncode": 0, "stdout": json.dumps({"skills": [
+            runner = FakeRunner(self._safe_cli_responses({"skills": [
                     {"name": "grilling", "path": str(install_root / "grilling")},
                     {"name": "domain-modeling", "path": str(bad)},
                     {"name": "codebase-design", "path": str(install_root / "codebase-design")},
-                ]})},
-                ("npx", "skills", "add", "--help"): {"returncode": 0, "stdout": "Usage: skills add <source>"},
-                ("npx", "skills", "update", "--help"): {"returncode": 0, "stdout": "Usage: skills update [name]"},
-            })
+                ]}, {"skills": []}))
 
             report = preflight.run_preflight(skill_roots=[install_root], runner=runner)
 
@@ -98,11 +102,12 @@ class PreflightTests(unittest.TestCase):
                 ("npx", "skills", "list", "--json"): FileNotFoundError("npx"),
             })
 
-            report = preflight.run_preflight(skill_roots=[root], runner=runner)
+            report = preflight.run_preflight(skill_roots={"global": [root]}, runner=runner)
 
             self.assertTrue(report["ready"])
             self.assertFalse(report["cli"]["available"])
             self.assertEqual(report["install_commands"], [])
+            self.assertTrue(all(item["scope"] == "global" for item in report["capabilities"] if item["verified"]))
             self.assertFalse(report["actions_performed"])
 
     def test_missing_required_blocks_but_optional_and_reference_do_not(self):
@@ -114,11 +119,7 @@ class PreflightTests(unittest.TestCase):
                 {"name": "grilling", "path": str(root / "grilling")},
                 {"name": "domain-modeling", "path": str(root / "domain-modeling")},
             ]}
-            runner = FakeRunner({
-                ("npx", "skills", "list", "--json"): {"returncode": 0, "stdout": json.dumps(payload)},
-                ("npx", "skills", "add", "--help"): {"returncode": 0, "stdout": "Usage: skills add <source> --global"},
-                ("npx", "skills", "update", "--help"): {"returncode": 0, "stdout": "Usage: skills update [name]"},
-            })
+            runner = FakeRunner(self._safe_cli_responses(payload, {"skills": []}))
 
             report = preflight.run_preflight(
                 skill_roots=[root], runner=runner, optional_capabilities=["requesting-code-review"]
@@ -130,26 +131,52 @@ class PreflightTests(unittest.TestCase):
             reference = next(item for item in report["capabilities"] if item["name"] == "grill-with-docs")
             self.assertEqual(reference["role"], "compatibility-reference")
             self.assertFalse(reference["callable_dependency"])
-            self.assertIn("skills add", report["install_commands"][0])
+            self.assertEqual(len(report["install_commands"]), 1)
+            self.assertIn("skills add mattpocock/skills", report["install_commands"][0])
             self.assertIn("codebase-design", report["install_commands"][0])
-            self.assertTrue(all("skills update" in command for command in report["update_commands"]))
+            self.assertNotIn("requesting-code-review", report["install_commands"][0])
+            self.assertEqual(report["update_commands"], report["install_commands"])
+            self.assertFalse(any(call[2:3] in (["add"], ["update"]) for call in runner.calls))
             self.assertFalse(report["actions_performed"])
+            self.assertFalse(report["accepted_upstream_changes"])
 
     def test_stale_cli_metadata_is_rejected_by_filesystem_verification(self):
         with tempfile.TemporaryDirectory() as directory:
             missing = Path(directory) / "removed" / "grilling"
-            runner = FakeRunner({
-                ("npx", "skills", "list", "--json"): {"returncode": 0, "stdout": json.dumps({"skills": [
+            runner = FakeRunner(self._safe_cli_responses({"skills": [
                     {"name": "grilling", "path": str(missing)},
-                ]})},
-                ("npx", "skills", "add", "--help"): {"returncode": 0, "stdout": "Usage: skills add <source>"},
-                ("npx", "skills", "update", "--help"): {"returncode": 0, "stdout": "Usage: skills update [name]"},
-            })
+                ]}, {"skills": []}))
 
             report = preflight.run_preflight(skill_roots=[], runner=runner)
 
             grilling = next(item for item in report["capabilities"] if item["name"] == "grilling")
             self.assertEqual(grilling["status"], "stale-metadata")
+            self.assertFalse(grilling["verified"])
+
+    def test_successful_cli_inventory_is_not_augmented_from_unreported_filesystem_skills(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in preflight.REQUIRED_CAPABILITIES:
+                self._skill(root, name)
+            runner = FakeRunner(self._safe_cli_responses({"skills": []}, {"skills": []}))
+
+            report = preflight.run_preflight(skill_roots={"project": [root]}, runner=runner)
+
+            self.assertFalse(report["ready"])
+            self.assertEqual(report["missing_required"], list(preflight.REQUIRED_CAPABILITIES))
+
+    def test_metadata_name_in_body_is_not_accepted_without_yaml_frontmatter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "grilling"
+            path.mkdir()
+            path.joinpath("SKILL.md").write_text("# Notes\nname: grilling\n", encoding="utf-8")
+            runner = FakeRunner(self._safe_cli_responses(
+                {"skills": [{"name": "grilling", "path": str(path)}]}, {"skills": []}
+            ))
+
+            report = preflight.run_preflight(runner=runner)
+
+            grilling = next(item for item in report["capabilities"] if item["name"] == "grilling")
             self.assertFalse(grilling["verified"])
 
 
