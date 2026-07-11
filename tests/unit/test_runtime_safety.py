@@ -182,6 +182,35 @@ class RuntimeEvidenceSanitizationTests(unittest.TestCase):
         ):
             self.assertNotIn(token, sanitized)
 
+    def test_sanitizer_maps_fixture_and_repository_roots_to_stable_placeholders(self):
+        safety = load_helper(self)
+        repo_root = "/Users/alice/work/grill-harness"
+        fixture_root = repo_root + "/tests/scenarios/codex/fixtures"
+        raw = (
+            f"repo={repo_root}/skills/grill-harness/SKILL.md "
+            f"fixture={fixture_root}/project/README.md"
+        )
+        sanitized = safety.sanitize_runtime_text(
+            raw,
+            repo_root=repo_root,
+            fixture_root=fixture_root,
+        )
+        self.assertEqual(
+            sanitized,
+            "repo=<REPO_ROOT>/skills/grill-harness/SKILL.md "
+            "fixture=<FIXTURE_ROOT>/project/README.md",
+        )
+        self.assertNotIn("/Users/alice", sanitized)
+
+    def test_sanitizer_maps_private_var_alias_without_leaving_private_prefix(self):
+        safety = load_helper(self)
+        sanitized = safety.sanitize_runtime_text(
+            "file:///private/var/folders/x/grh-codex.ABC/home/log",
+            temp_root="/var/folders/x/grh-codex.ABC",
+        )
+        self.assertEqual(sanitized, "file://<TEMP_ROOT>/home/log")
+        self.assertNotIn("/private<TEMP_ROOT>", sanitized)
+
     def test_committed_runtime_results_have_no_sensitive_correlation_metadata(self):
         patterns = {
             "uuid": re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b", re.I),
@@ -194,6 +223,22 @@ class RuntimeEvidenceSanitizationTests(unittest.TestCase):
                 r"BEDROCK_[A-Z_]*(?:KEY|TOKEN)|GOOGLE_APPLICATION_CREDENTIALS|"
                 r"VERTEX_[A-Z_]+|AZURE_[A-Z_]*(?:KEY|TOKEN))\b\s*[:=]\s*[\"']?(?:fake-|sk-|AKIA|[A-Za-z0-9_/.-]{12,})"
             ),
+        }
+        violations = []
+        for path in RESULTS.rglob("*"):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for name, pattern in patterns.items():
+                if pattern.search(text):
+                    violations.append(f"{path.relative_to(REPO_ROOT)}:{name}")
+        self.assertEqual(violations, [])
+
+    def test_committed_runtime_results_have_no_personal_absolute_paths(self):
+        patterns = {
+            "mac_home": re.compile(r"/Users/[^/\s\"']+(?:/|$)"),
+            "linux_home": re.compile(r"(?<!<TEMP_ROOT>)/home/[^/\s\"']+(?:/|$)"),
+            "root_home": re.compile(r"(?<!<TEMP_ROOT>)/root(?:/|$)"),
         }
         violations = []
         for path in RESULTS.rglob("*"):

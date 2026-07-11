@@ -39,11 +39,26 @@ def minimal_environment(
     return environment
 
 
-def sanitize_runtime_text(text: str, *, temp_root: str | None = None) -> str:
+def _replace_root(text: str, root: str | None, placeholder: str) -> str:
+    if not root:
+        return text
+    if root.startswith("/var/"):
+        text = text.replace("/private" + root, placeholder)
+    text = text.replace(root, placeholder)
+    return text
+
+
+def sanitize_runtime_text(
+    text: str,
+    *,
+    temp_root: str | None = None,
+    repo_root: str | None = None,
+    fixture_root: str | None = None,
+) -> str:
+    text = _replace_root(text, fixture_root, "<FIXTURE_ROOT>")
+    text = _replace_root(text, repo_root, "<REPO_ROOT>")
     if temp_root:
-        text = text.replace(temp_root, "<TEMP_ROOT>")
-        if temp_root.startswith("/var/"):
-            text = text.replace("/private" + temp_root, "<TEMP_ROOT>")
+        text = _replace_root(text, temp_root, "<TEMP_ROOT>")
     text = re.sub(
         r'("thread_id"\s*:\s*")[^"]+(" )?',
         lambda match: match.group(1) + "<THREAD_ID>" + (match.group(2) or ""),
@@ -119,6 +134,8 @@ def main() -> int:
             command.add_argument("remainder", nargs=argparse.REMAINDER)
     sanitize = subparsers.add_parser("sanitize-file")
     sanitize.add_argument("--temp-root")
+    sanitize.add_argument("--repo-root")
+    sanitize.add_argument("--fixture-root")
     sanitize.add_argument("paths", nargs="+")
     args = parser.parse_args()
 
@@ -138,6 +155,8 @@ def main() -> int:
             sanitized = sanitize_runtime_text(
                 path.read_text(encoding="utf-8", errors="replace"),
                 temp_root=args.temp_root,
+                repo_root=args.repo_root,
+                fixture_root=args.fixture_root,
             )
             path.write_text(sanitized, encoding="utf-8")
         return 0

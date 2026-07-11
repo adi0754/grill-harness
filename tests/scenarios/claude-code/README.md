@@ -25,7 +25,8 @@ falling back to user-global state.
 Claude and Git child processes receive a minimal environment allowlist rather
 than a copy of the parent environment. Persisted results normalize random temp
 roots, session/thread IDs, UUIDs, request IDs, and cf-ray values while keeping
-the authentication error type and exit evidence.
+the authentication error type and exit evidence. Repository and fixture paths
+are persisted only as `<REPO_ROOT>` and `<FIXTURE_ROOT>` placeholders.
 
 The eight equivalent contexts are:
 

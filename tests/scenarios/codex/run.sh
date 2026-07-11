@@ -23,7 +23,11 @@ run_isolated() {
 }
 
 sanitize_files() {
-  python3 "$SAFETY" sanitize-file --temp-root "$TMP" "$@"
+  python3 "$SAFETY" sanitize-file \
+    --temp-root "$TMP" \
+    --repo-root "$REPO" \
+    --fixture-root "$HERE/fixtures" \
+    "$@"
 }
 
 run_isolated codex --version > "$OUT/version.txt" 2>&1

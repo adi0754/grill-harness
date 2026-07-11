@@ -37,6 +37,8 @@ class CodexScenarioEvidenceTests(unittest.TestCase):
             'runtime_safety.py',
             'exec-env',
             'sanitize-file',
+            '--repo-root "$REPO"',
+            '--fixture-root "$HERE/fixtures"',
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, runner)

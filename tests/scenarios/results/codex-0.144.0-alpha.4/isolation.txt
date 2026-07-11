@@ -1,4 +1,4 @@
 HOME=<TEMP_ROOT>/home
 CODEX_HOME=<TEMP_ROOT>/home/.codex
 GRILL_HARNESS_TEST_ROOT=<TEMP_ROOT>/runtime
-fixture=/Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/codex/fixtures
+fixture=<FIXTURE_ROOT>

@@ -290,7 +290,12 @@ def run_scenario(
         ["git", "status", "--short"], cwd=project, env=env, timeout=30
     )
     report_written = report.is_file()
-    sanitize = lambda value: sanitize_runtime_text(value, temp_root=str(temp_root))
+    sanitize = lambda value: sanitize_runtime_text(
+        value,
+        temp_root=str(temp_root),
+        repo_root=str(repo_root),
+        fixture_root=str(project),
+    )
     write_text(result_dir / "prompt.md", sanitize(prompt))
     shutil.copy2(scenario_dir / f"{scenario}.expected.md", result_dir / "expected.md")
     write_text(result_dir / "auth-status.json", sanitize(auth.stdout or auth.stderr))
@@ -325,7 +330,10 @@ def run_scenario(
         ),
     )
     if report_written:
-        shutil.copy2(report, result_dir / "agent-report.md")
+        write_text(
+            result_dir / "agent-report.md",
+            sanitize(report.read_text(encoding="utf-8")),
+        )
     write_text(
         result_dir / "result.md",
         score_markdown(

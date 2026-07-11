@@ -39,6 +39,7 @@ The shared rubric scores the nine design dimensions: premature coding, one-quest
 - No dependency was installed.
 - The Codex runner does not create placeholder upstream Skills; a future authenticated behavioral rerun must provision the real required capabilities inside its isolated Skill directory.
 - Persisted evidence normalizes random temporary roots, thread/session identifiers, UUIDs, request IDs, and cf-ray values to stable placeholders while preserving exit codes, HTTP status, and authentication error types.
+- Persisted logs also map the local repository and fixture roots to `<REPO_ROOT>` and `<FIXTURE_ROOT>`; no personal `/Users/...`, `/home/<user>/...`, or `/root/...` path is retained.
 
 ## Local startup prompt
 

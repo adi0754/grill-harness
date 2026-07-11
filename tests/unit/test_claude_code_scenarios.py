@@ -59,6 +59,8 @@ class ClaudeCodeScenarioEvidenceTests(unittest.TestCase):
             "make_read_only(project)",
             "minimal_environment",
             "sanitize_runtime_text",
+            "repo_root=str(repo_root)",
+            "fixture_root=str(project)",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, runner)
