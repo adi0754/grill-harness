@@ -7,6 +7,12 @@ ROUTER_DIR = REPO_ROOT / "tests" / "scenarios" / "router"
 
 
 class RouterScenarioEvidenceTests(unittest.TestCase):
+    def test_router_uses_init_for_first_mutating_use(self):
+        router = (REPO_ROOT / "skills" / "grill-harness" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("grh> init --project", router)
+        self.assertIn("not_started", router)
+
     def test_final_green_evidence_uses_grh_for_every_route(self):
         green = (ROUTER_DIR / "GREEN.md").read_text(encoding="utf-8")
         sections = {

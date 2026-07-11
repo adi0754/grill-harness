@@ -24,6 +24,10 @@ fail() {
   exit 1
 }
 
+hash_file() {
+  python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$1"
+}
+
 discovery=$(run_skills add "$REPO_ROOT" --list)
 grep -q 'grill-harness' <<<"$discovery" || fail "current skills CLI did not discover grill-harness"
 
@@ -53,11 +57,11 @@ grep -Fq '"ready": true' <<<"$preflight" \
 printf 'user workflow data\n' >"$TEMP_ROOT/runtime-sentinel"
 mkdir -p "$GRILL_HARNESS_TEST_ROOT/项目/example/工作流/example"
 cp "$TEMP_ROOT/runtime-sentinel" "$GRILL_HARNESS_TEST_ROOT/项目/example/工作流/example/state.yaml"
-before=$(shasum -a 256 "$GRILL_HARNESS_TEST_ROOT/项目/example/工作流/example/state.yaml")
+before=$(hash_file "$GRILL_HARNESS_TEST_ROOT/项目/example/工作流/example/state.yaml")
 
 run_skills remove grill-harness -g -a codex claude-code -y
 
-after=$(shasum -a 256 "$GRILL_HARNESS_TEST_ROOT/项目/example/工作流/example/state.yaml")
+after=$(hash_file "$GRILL_HARNESS_TEST_ROOT/项目/example/工作流/example/state.yaml")
 [[ "$before" == "$after" ]] || fail "uninstall changed isolated user workflow data"
 [[ ! -e "$CODEX_SKILL" ]] || fail "Codex uninstall left installed skill"
 [[ ! -e "$CLAUDE_SKILL" ]] || fail "Claude Code uninstall left installed skill"

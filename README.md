@@ -47,11 +47,12 @@ npx skills update grill-harness -g
 ```bash
 GRH="$HOME/.agents/skills/grill-harness/scripts/grh.py"
 python3 "$GRH" preflight --skill-root "$HOME/.agents/skills"
+python3 "$GRH" init --project "$PWD" --workflow-name 发布检查 --created-date 2026-07-12
 python3 "$GRH" status --project "$PWD"
-python3 "$GRH" reconcile --workflow /绝对路径/state.yaml
+python3 "$GRH" reconcile --workflow /绝对路径/工作流目录
 ```
 
-`preflight` 只检查能力并给出建议，不自动安装或更新。`status` 是只读命令；恢复检查使用 `reconcile`，发生冲突时不会替用户选择版本。
+`preflight` 只检查能力并给出建议，不自动安装或更新。`init` 首次创建 `~/.grill-harness/` 下的项目索引和工作流；可用 `--workflow-key` 提供稳定键，重复执行不会覆盖已有用户数据，也不会写入产品仓库。`status` 是只读命令；恢复检查使用 `reconcile`，发生冲突时不会替用户选择版本。
 
 ## 上游检查
 

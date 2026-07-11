@@ -19,6 +19,7 @@ Resolve `<grh>` to the absolute path of `scripts/grh.py`, then use its JSON comm
 2. `python3 <grh> preflight [--skill-root <installed-skills-root>]`
 3. `python3 <grh> status --project <absolute-project> [--workflow <state.yaml>]`
 4. When a specific artifact needs checking: `python3 <grh> reconcile --workflow <state.yaml>`
+5. Only after `status` returns `not_started` and the user intends to start: `python3 <grh> init --project <absolute-project> --workflow-name <name> --created-date <YYYY-MM-DD> [--workflow-key <stable-key>]`
 
 `status` reconciles present artifacts and checks phase gates before returning `next_eligible_phase`. `not_started` plus start intent takes the start route; absence alone is not recovery. Exit `1` means dependency or reconciliation policy blocked progress; exit `2` means input/I/O failure. On either, stop and report the JSON—never infer success. A prior Agent summary is not gate evidence.
 
@@ -26,7 +27,7 @@ Resolve `<grh>` to the absolute path of `scripts/grh.py`, then use its JSON comm
 
 | User intent | Route |
 |---|---|
-| Start, plan, or shape new work | Load `references/工作流状态机.md` and `references/文档与产物契约.md`; begin at the earliest incomplete pre-implementation phase. |
+| Start, plan, or shape new work | If verified status is `not_started`, initialize persisted state with `init`; then load `references/工作流状态机.md` and `references/文档与产物契约.md` and begin at the earliest incomplete pre-implementation phase. |
 | Continue, resume, or “pick up where we left off” | Use reconciled persisted state, then enter only the next phase whose prerequisites pass. Load that phase's references before acting. |
 | Status, progress, or “what is next?” | Read only. Report project/workflow identity, authoritative phase, gate status, conflicts, and next eligible action. |
 | Recover, interrupted, inconsistent, or manually edited workflow | Load `references/工作流状态机.md` and `references/文档与产物契约.md`; preserve conflicting artifacts, stop affected phases, and request the required user decision. Never choose the most complete-looking file as authority. |

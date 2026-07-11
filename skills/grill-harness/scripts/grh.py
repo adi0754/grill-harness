@@ -3,9 +3,11 @@
 
 import argparse
 import json
+import shutil
 import sys
 from collections.abc import Mapping
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 
 import common
@@ -46,7 +48,10 @@ def _project_payload(project):
 
 def _workflow_file(path):
     source = Path(path).expanduser().resolve()
-    return source / "state.yaml" if source.is_dir() else source
+    if not source.is_dir():
+        return source
+    system_state = source / "系统" / "state.yaml"
+    return system_state if system_state.is_file() else source / "state.yaml"
 
 
 def _discover_workflow(identity):
@@ -56,7 +61,7 @@ def _discover_workflow(identity):
         / identity.directory_name
         / "工作流"
     )
-    candidates = sorted(workflows.glob("*/state.yaml")) if workflows.is_dir() else []
+    candidates = sorted(workflows.glob("*/系统/state.yaml")) if workflows.is_dir() else []
     if len(candidates) > 1:
         raise ValueError(
             "multiple workflows found; pass --workflow: {}".format(
@@ -175,6 +180,145 @@ def _preflight(args):
     }
 
 
+def _read_mapping(path, label):
+    value = common.read_yaml(path)
+    if not isinstance(value, dict):
+        raise ValueError("{} must be a JSON-compatible YAML mapping: {}".format(label, path))
+    return value
+
+
+def _initialize_workflow(identity, workflow_name, workflow_key, created_on):
+    root_paths = common.ensure_storage_layout()
+    storage_root = common.resolve_storage_root()
+    project_index_path = storage_root / "项目索引.yaml"
+    project_directory = root_paths["projects"] / identity.directory_name
+    project_info_path = project_directory / "项目信息.yaml"
+    workflow_identifier = state.workflow_id(identity.project_id, workflow_key)
+    workflow_directory = (
+        project_directory
+        / "工作流"
+        / state.workflow_directory_name(
+            workflow_name,
+            identity.project_id,
+            workflow_key,
+            created_on,
+        )
+    )
+    directory_names = ("核心文档", "过程产物", "最终产物", "系统")
+    required_directories = tuple(workflow_directory / name for name in directory_names)
+    system_payloads = {
+        "state.yaml": {
+            "schema_version": 1,
+            "project_id": identity.project_id,
+            "workflow_id": workflow_identifier,
+            "workflow_name": workflow_name,
+            "workflow_key": workflow_key,
+            "created_date": created_on.isoformat(),
+            "phases": [
+                {"id": phase_id, "status": "pending"}
+                for phase_id in state.WORKFLOW_PHASES
+            ],
+            "artifacts": [],
+            "tasks": [],
+            "evidence": [],
+            "gates": {},
+        },
+        "artifacts.yaml": {"artifacts": []},
+        "tasks.yaml": {"tasks": []},
+        "evidence.yaml": {"evidence": []},
+    }
+    required_files = tuple(workflow_directory / "系统" / name for name in system_payloads)
+
+    project_record = {
+        "project_id": identity.project_id,
+        "directory_name": identity.directory_name,
+        "normalized_path": identity.normalized_path,
+        "is_git": identity.is_git,
+        "normalized_remote": identity.normalized_remote,
+        "history_roots": list(identity.history_roots),
+        "relocation_candidates": list(identity.relocation_candidates),
+    }
+    if project_info_path.exists() and _read_mapping(project_info_path, "project info") != project_record:
+        raise ValueError("project info conflicts with identified project: {}".format(project_info_path))
+
+    if project_index_path.exists():
+        project_index = _read_mapping(project_index_path, "project index")
+        projects = project_index.get("projects")
+        if not isinstance(projects, list):
+            raise ValueError("project index projects must be a list: {}".format(project_index_path))
+        matching = [item for item in projects if isinstance(item, dict) and item.get("project_id") == identity.project_id]
+        if matching and matching != [project_record]:
+            raise ValueError("project index conflicts with identified project: {}".format(project_index_path))
+    else:
+        project_index = {"projects": []}
+        projects = project_index["projects"]
+        matching = []
+
+    if workflow_directory.exists():
+        missing = [str(path) for path in required_directories if not path.is_dir()]
+        missing.extend(str(path) for path in required_files if not path.is_file())
+        if missing:
+            raise ValueError(
+                "existing workflow is incomplete; refusing to overwrite user data: {}".format(
+                    ", ".join(missing)
+                )
+            )
+        created = False
+    else:
+        workflows_directory = workflow_directory.parent
+        workflows_directory.mkdir(parents=True, exist_ok=True)
+        temporary = workflows_directory / ".{}.{}.tmp".format(
+            workflow_directory.name,
+            state.new_workflow_id(),
+        )
+        try:
+            for name in directory_names:
+                (temporary / name).mkdir(parents=True, exist_ok=False)
+            for filename, payload in system_payloads.items():
+                common.atomic_write_yaml(temporary / "系统" / filename, payload)
+            temporary.rename(workflow_directory)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(str(temporary))
+        created = True
+
+    if not project_info_path.exists():
+        common.atomic_write_yaml(project_info_path, project_record)
+    if not matching:
+        updated_index = dict(project_index)
+        updated_index["projects"] = list(projects) + [project_record]
+        common.atomic_write_yaml(project_index_path, updated_index)
+    return created, workflow_identifier, workflow_directory
+
+
+def _init(args):
+    try:
+        created_on = date.fromisoformat(args.created_date)
+    except ValueError as error:
+        raise ValueError("created date must use YYYY-MM-DD: {}".format(error))
+    workflow_name = args.workflow_name.strip()
+    if not workflow_name:
+        raise ValueError("workflow name must not be empty")
+    workflow_key = (args.workflow_key or workflow_name).strip()
+    if not workflow_key:
+        raise ValueError("workflow key must not be empty")
+    identity = state.identify_project(Path(args.project))
+    created, workflow_identifier, workflow_path = _initialize_workflow(
+        identity,
+        workflow_name,
+        workflow_key,
+        created_on,
+    )
+    return 0, {
+        "ok": True,
+        "command": "init",
+        "created": created,
+        "project_id": identity.project_id,
+        "workflow_id": workflow_identifier,
+        "workflow_path": str(workflow_path),
+    }
+
+
 def _reconcile(args):
     workflow_path = _workflow_file(args.workflow)
     workflow = common.read_yaml(workflow_path)
@@ -252,6 +396,13 @@ def _parser():
     preflight_command = commands.add_parser("preflight")
     preflight_command.add_argument("--skill-root", action="append", default=[])
     preflight_command.set_defaults(handler=_preflight)
+
+    init = commands.add_parser("init")
+    init.add_argument("--project", required=True)
+    init.add_argument("--workflow-name", required=True)
+    init.add_argument("--workflow-key")
+    init.add_argument("--created-date", required=True)
+    init.set_defaults(handler=_init)
 
     status = commands.add_parser("status")
     status.add_argument("--project", required=True)

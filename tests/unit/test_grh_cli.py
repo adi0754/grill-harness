@@ -94,6 +94,125 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertEqual(payload["next_eligible_phase"], "preflight")
             self.assertFalse(root.exists())
 
+    def test_init_creates_minimal_workflow_only_under_test_storage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            (project / "README.md").write_text("fixture\n", encoding="utf-8")
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+
+            result = run_cli(
+                "init",
+                "--project",
+                str(project),
+                "--workflow-name",
+                "发布检查",
+                "--workflow-key",
+                "release-check",
+                "--created-date",
+                "2026-07-12",
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["created"])
+            workflow = Path(payload["workflow_path"])
+            self.assertTrue(workflow.name.endswith(payload["workflow_id"][:8]))
+            self.assertTrue(str(workflow).startswith(str(root.resolve())))
+            self.assertFalse((project / ".grill-harness").exists())
+            self.assertEqual((project / "README.md").read_text(encoding="utf-8"), "fixture\n")
+            self.assertTrue((root / "项目索引.yaml").is_file())
+            self.assertTrue((workflow.parent.parent / "项目信息.yaml").is_file())
+            for directory in ("核心文档", "过程产物", "最终产物", "系统"):
+                self.assertTrue((workflow / directory).is_dir())
+            for filename in ("state.yaml", "artifacts.yaml", "tasks.yaml", "evidence.yaml"):
+                self.assertTrue((workflow / "系统" / filename).is_file())
+            self.assertEqual(list(workflow.parent.glob(".*.tmp")), [])
+
+            state_payload = json.loads((workflow / "系统" / "state.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(state_payload["workflow_id"], payload["workflow_id"])
+            self.assertEqual(state_payload["project_id"], payload["project_id"])
+            self.assertEqual(state_payload["phases"][0], {"id": "preflight", "status": "pending"})
+
+            status = run_cli("status", "--project", str(project), env=env)
+            self.assertEqual(status.returncode, 0, status.stdout)
+            status_payload = json.loads(status.stdout)
+            self.assertEqual(status_payload["status"], "active")
+            self.assertEqual(status_payload["workflow_path"], str(workflow / "系统" / "state.yaml"))
+
+    def test_init_is_idempotent_and_does_not_overwrite_existing_workflow_data(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            arguments = (
+                "init", "--project", str(project), "--workflow-name", "发布检查",
+                "--workflow-key", "release-check", "--created-date", "2026-07-12",
+            )
+            first = run_cli(*arguments, env=env)
+            self.assertEqual(first.returncode, 0, first.stdout)
+            workflow = Path(json.loads(first.stdout)["workflow_path"])
+            sentinel = workflow / "核心文档" / "用户内容.md"
+            sentinel.write_text("keep\n", encoding="utf-8")
+
+            second = run_cli(*arguments, env=env)
+
+            self.assertEqual(second.returncode, 0, second.stdout)
+            self.assertFalse(json.loads(second.stdout)["created"])
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_init_refuses_to_complete_a_partial_existing_workflow(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            first = run_cli(
+                "init", "--project", str(project), "--workflow-name", "发布检查",
+                "--workflow-key", "release-check", "--created-date", "2026-07-12",
+                env=env,
+            )
+            workflow = Path(json.loads(first.stdout)["workflow_path"])
+            state_file = workflow / "系统" / "state.yaml"
+            state_file.unlink()
+            sentinel = workflow / "核心文档" / "用户内容.md"
+            sentinel.write_text("keep\n", encoding="utf-8")
+
+            second = run_cli(
+                "init", "--project", str(project), "--workflow-name", "发布检查",
+                "--workflow-key", "release-check", "--created-date", "2026-07-12",
+                env=env,
+            )
+
+            self.assertEqual(second.returncode, 2)
+            self.assertFalse(state_file.exists())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_init_rejects_invalid_created_date_as_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+
+            result = run_cli(
+                "init", "--project", str(project), "--workflow-name", "发布检查",
+                "--created-date", "12-07-2026",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr, "")
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["command"], "init")
+
     def test_status_reconciles_an_explicit_workflow(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "project"
