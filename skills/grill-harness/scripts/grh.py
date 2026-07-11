@@ -187,6 +187,51 @@ def _read_mapping(path, label):
     return value
 
 
+def _validate_existing_workflow(
+    workflow_directory,
+    identity,
+    workflow_identifier,
+    workflow_name,
+    workflow_key,
+    created_on,
+):
+    system_directory = workflow_directory / "系统"
+    state_path = system_directory / "state.yaml"
+    state_payload = _read_mapping(state_path, "workflow state")
+    expected_identity = {
+        "project_id": identity.project_id,
+        "workflow_id": workflow_identifier,
+        "workflow_name": workflow_name,
+        "workflow_key": workflow_key,
+        "created_date": created_on.isoformat(),
+    }
+    actual_identity = {
+        field: state_payload.get(field)
+        for field in expected_identity
+    }
+    if actual_identity != expected_identity:
+        raise ValueError(
+            "workflow identity conflicts with init request: {}".format(state_path)
+        )
+    if state_payload.get("schema_version") != 1:
+        raise ValueError("workflow state schema_version must be 1: {}".format(state_path))
+    for field in ("phases", "artifacts", "tasks", "evidence"):
+        if not isinstance(state_payload.get(field), list):
+            raise ValueError("workflow state {} must be a list: {}".format(field, state_path))
+    if not isinstance(state_payload.get("gates"), dict):
+        raise ValueError("workflow state gates must be a mapping: {}".format(state_path))
+
+    for filename, field in (
+        ("artifacts.yaml", "artifacts"),
+        ("tasks.yaml", "tasks"),
+        ("evidence.yaml", "evidence"),
+    ):
+        path = system_directory / filename
+        payload = _read_mapping(path, field + " manifest")
+        if not isinstance(payload.get(field), list):
+            raise ValueError("{} manifest {} must be a list: {}".format(field, field, path))
+
+
 def _initialize_workflow(identity, workflow_name, workflow_key, created_on):
     root_paths = common.ensure_storage_layout()
     storage_root = common.resolve_storage_root()
@@ -263,6 +308,14 @@ def _initialize_workflow(identity, workflow_name, workflow_key, created_on):
                     ", ".join(missing)
                 )
             )
+        _validate_existing_workflow(
+            workflow_directory,
+            identity,
+            workflow_identifier,
+            workflow_name,
+            workflow_key,
+            created_on,
+        )
         created = False
     else:
         workflows_directory = workflow_directory.parent
