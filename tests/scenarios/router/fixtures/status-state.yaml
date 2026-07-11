@@ -1,0 +1,9 @@
+{
+  "phases": [
+    {"id": "alignment", "status": "in_progress"}
+  ],
+  "artifacts": [],
+  "tasks": [],
+  "evidence": [],
+  "gates": {}
+}

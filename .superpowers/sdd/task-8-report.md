@@ -29,7 +29,7 @@
 
 ```text
 python3 -m unittest discover -s tests -p 'test_*.py'
-Ran 122 tests in 0.748s
+Ran 128 tests in 0.986s
 OK
 
 git diff --check
@@ -37,3 +37,13 @@ git diff --check
 ```
 
 Bundled `quick_validate.py` 使用当前 `/usr/bin/python3` 运行时因缺少既有 `yaml` 模块而无法执行：`ModuleNotFoundError: No module named 'yaml'`。按要求未安装依赖，因此本轮 quick_validate 标记为未验证，不宣称通过。
+
+## 外部审查修复
+
+审查发现三个 Important 后再次进入 RED/GREEN：
+
+- RED：`implementation` 已 `in_progress` 但缺 `final_spec_approval` 时，旧 status exit 0 并错误回退 `next_eligible_phase: preflight`。修复后 status/reconcile 会为所有已进入或完成阶段调用现有 gate validator，追加 `PHASE_GATE` 冲突，返回 exit 1、`recovery_required` 和 null next phase；current phase 优先选择真实活动阶段，不被较早 pending 阶段遮蔽。
+- RED：无命令、未知命令、缺必需参数仍由 argparse 写 stderr usage。自定义 parser 后这些输入统一 stdout JSON、exit 2、空 stderr。
+- RED：旧 GREEN 只有 start 使用 `grh.py`，其余沿用模块级叙述。现已为五条路线建立 tracked fixtures，使用最终统一 CLI 实际运行并记录命令、隔离 root、exit code、JSON 摘要及五个新上下文回答；未沿用旧证据。
+
+新增专项断言后 `test_grh_cli` 与 `test_router_scenarios` 共 12/12 通过，全量 128/128 通过。畸形非 mapping `gates` 也会生成机器可读 `PHASE_GATE` 冲突，不再泄露 traceback。

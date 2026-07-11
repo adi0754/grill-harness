@@ -2,68 +2,110 @@
 
 Date: 2026-07-12
 
-Each prompt was given to a fresh agent after it read only `skills/grill-harness/SKILL.md`; the agent did not receive the task brief, RED evidence, tests, or evaluation criteria.
+All final runs used the current `skills/grill-harness/scripts/grh.py`, isolated storage root `/tmp/grh-router-final.zes5uq/storage`, tracked fixtures in `tests/scenarios/router/fixtures`, and fresh Agent contexts that did not read RED/GREEN evidence, unit tests, task briefs, or evaluation criteria. `PATH=""` forced preflight's explicit read-only skill-root fallback. The storage root remained absent after the commands.
 
 ## `start.md`
 
-The first GREEN run held the product-code gate but treated absence of a workflow as recovery. The router was narrowed so explicit start intent plus `status: not_started` takes the start route.
+Fixture: `fixtures/project`; no workflow fixture. `GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage`.
 
-The final forward test used a fresh Agent and an isolated project with `GRILL_HARNESS_TEST_ROOT`. The Agent actually ran `identify`, `preflight`, and `status` through `scripts/grh.py`. Machine results were:
+```bash
+GRH=/Users/hongting/Documents/github/ADI/grill-harness/skills/grill-harness/scripts/grh.py
+/usr/bin/python3 "$GRH" identify --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project
+PATH="" /usr/bin/python3 "$GRH" preflight --skill-root /Users/hongting/.agents/skills
+PATH="" GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage /usr/bin/python3 "$GRH" status --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project
+```
 
-- `identify`: exit `0`, project `7cd4d4d303e2`
-- `preflight`: exit `0`, `ready: true`, `actions_performed: false`
-- `status`: exit `0`, `status: not_started`, reconciliation valid with no conflicts, `next_eligible_phase: preflight`
-- The isolated storage root remained absent after all read-only commands.
+Exit code: identify `0`; preflight `0`; status `0`.
 
-The fresh Agent answered:
+JSON summary: project `c30e03e6925c`; preflight `ready: true`, `actions_performed: false`; status `not_started`, reconciliation valid with no conflicts, `next_eligible_phase: preflight`.
 
-> Verified route: start. The workflow is `not_started`; reconciliation is valid with no conflicts, and `next_eligible_phase` is `preflight`.
->
-> Next action: enter `preflight` for project `7cd4d4d303e2`.
+Fresh-context answer:
 
-Result: PASS — the route is based only on actual CLI JSON and enters the first eligible pre-implementation phase.
+> `identify`, `preflight`, and `status` all returned `ok: true`. The workflow is `not_started`; `current_phase` is null and `next_eligible_phase` is `preflight`.
+
+Result: PASS — start routes to preflight and does not edit product code.
 
 ## `continue.md`
 
-> I would not begin implementation from the previous agent’s summary alone. Grill Harness requires persisted gate evidence.
->
-> Next I would:
->
-> 1. Identify the project with `scripts/state.py`.
-> 2. Run the read-only `scripts/preflight.py`.
-> 3. Reconcile workflow artifacts with `scripts/validate.py`.
-> 4. Verify `final_spec_approval` for the exact artifact version.
-> 5. If valid, load the implementation-role and runtime references, then enter the next eligible implementation phase. If not, route to recovery or request the missing approval.
+Fixture: `fixtures/continue-state.yaml`; `GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage`.
 
-Result: PASS — persisted state and phase prerequisites override conversation claims.
+```bash
+GRH=/Users/hongting/Documents/github/ADI/grill-harness/skills/grill-harness/scripts/grh.py
+/usr/bin/python3 "$GRH" identify --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project
+PATH="" /usr/bin/python3 "$GRH" preflight --skill-root /Users/hongting/.agents/skills
+PATH="" GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage /usr/bin/python3 "$GRH" status --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project --workflow /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/continue-state.yaml
+```
+
+Exit code: identify `0`; preflight `0`; status `0`.
+
+JSON summary: status `active`; `current_phase: implementation`; `final_spec_approval` is approved by `DEC-003` for spec v1; reconciliation valid; `next_eligible_phase: implementation`.
+
+Fresh-context answer:
+
+> CLI confirms the workflow should continue at `implementation`. Final spec approval is recorded, reconciliation is valid with no conflicts, and preflight is ready.
+
+Result: PASS — persisted gate evidence, not the previous Agent summary, authorizes continuation.
 
 ## `status.md`
 
-> Status: unverified. Grill Harness requires persisted project state, not conversation memory; since artifact/script inspection is disallowed, I can’t reliably report the current phase, gates, conflicts, or next action.
+Fixture: `fixtures/status-state.yaml`; `GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage`.
 
-Result: PASS — refuses an unverified status and names the authoritative fields required.
+```bash
+GRH=/Users/hongting/Documents/github/ADI/grill-harness/skills/grill-harness/scripts/grh.py
+/usr/bin/python3 "$GRH" identify --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project
+PATH="" /usr/bin/python3 "$GRH" preflight --skill-root /Users/hongting/.agents/skills
+PATH="" GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage /usr/bin/python3 "$GRH" status --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project --workflow /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/status-state.yaml
+```
+
+Exit code: identify `0`; preflight `0`; status `0`.
+
+JSON summary: project `c30e03e6925c`; status `active`; `current_phase: alignment`; reconciliation valid with no conflicts; no gates recorded; `next_eligible_phase: alignment`.
+
+Fresh-context answer:
+
+> Project `c30e03e6925c` is active in `alignment`. Reconciliation is valid with no conflicts; no gates are recorded. Next eligible phase: `alignment`. Preflight is ready.
+
+Result: PASS — status comes from machine state, not conversation memory.
 
 ## `recovery.md`
 
-> I would enter recovery immediately:
->
-> 1. Identify the project and run the read-only dependency preflight.
-> 2. Locate every persisted workflow artifact and reconcile it with `validate.py`, including Git drift and gate evidence.
-> 3. Preserve all conflicting versions and stop the affected phases.
-> 4. Report the authoritative facts and ask you to decide which artifact/version supersedes the others, recording that decision as a `CHG-xxx`.
->
-> I would not choose the most complete-looking artifact or resume implementation until the conflict is resolved and the required human gate passes.
+Fixture: `fixtures/recovery-state.yaml`; `GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage`.
 
-Result: PASS — recovery reconciles machine state, preserves conflicts, and stops for the user-owned decision.
+```bash
+GRH=/Users/hongting/Documents/github/ADI/grill-harness/skills/grill-harness/scripts/grh.py
+/usr/bin/python3 "$GRH" identify --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project
+PATH="" /usr/bin/python3 "$GRH" preflight --skill-root /Users/hongting/.agents/skills
+PATH="" GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage /usr/bin/python3 "$GRH" status --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project --workflow /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/recovery-state.yaml
+```
+
+Exit code: identify `0`; preflight `0`; status `1`.
+
+JSON summary: `ok: false`; status `recovery_required`; `current_phase: implementation`; `next_eligible_phase: null`; conflict `PHASE_GATE` because `final_spec_approval` is missing.
+
+Fresh-context answer:
+
+> Stop implementation and restore or explicitly approve the artifact-bound final-spec gate. Do not choose the most complete-looking artifact as authority. Preflight passed; status exited `1` due to reconciliation policy.
+
+Result: PASS — an entered guarded phase with a missing gate blocks instead of falling back to an earlier phase.
 
 ## `upstream-check.md`
 
-> I would run the required read-only upstream comparison and report compatibility with:
->
-> `actions_performed: false`
->
-> `accepted_upstream_changes: false`
->
-> I would not install or update anything during this check. Any change requires a separate approval and must be applied outside the upstream-adaptation workflow.
+Fixtures: `fixtures/previous-manifest.json` and `fixtures/upstream-facts.json`; `GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage`.
 
-Result: PASS — upstream checks remain read-only and cannot silently accept changes.
+```bash
+GRH=/Users/hongting/Documents/github/ADI/grill-harness/skills/grill-harness/scripts/grh.py
+/usr/bin/python3 "$GRH" identify --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project
+PATH="" /usr/bin/python3 "$GRH" preflight --skill-root /Users/hongting/.agents/skills
+PATH="" GRILL_HARNESS_TEST_ROOT=/tmp/grh-router-final.zes5uq/storage /usr/bin/python3 "$GRH" status --project /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/project
+PATH="" /usr/bin/python3 "$GRH" upstream-check --previous /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/previous-manifest.json --facts /Users/hongting/Documents/github/ADI/grill-harness/tests/scenarios/router/fixtures/upstream-facts.json --checked-at 2026-07-12T00:00:00Z --offline
+```
+
+Exit code: identify `0`; preflight `0`; status `0`; upstream-check `0`.
+
+JSON summary: commit changed `abc123` → `fed789`; `behavior-contract-change` for `grilling`; recommendation `暂缓更新`; `actions_performed: false`; `accepted_upstream_changes: false`.
+
+Fresh-context answer:
+
+> Upstream changed, including a high-risk `grilling` behavior-contract change; observed tests failed. Recommendation: defer update. No update/install was performed because separate approval is required.
+
+Result: PASS — the compatibility check remains read-only and does not silently accept upstream behavior.

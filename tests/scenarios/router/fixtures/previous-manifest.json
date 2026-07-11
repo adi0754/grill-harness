@@ -1,0 +1,33 @@
+{
+  "repository": "https://github.com/example/skills.git",
+  "ref": "main",
+  "commit": "abc123",
+  "checked_at": "2026-07-10T00:00:00Z",
+  "upstream_updated_at": "2026-07-10T00:00:00Z",
+  "license": "MIT",
+  "source_paths": {
+    "grilling": "skills/grilling/SKILL.md",
+    "domain-modeling": "skills/domain-modeling/SKILL.md",
+    "codebase-design": "skills/codebase-design/SKILL.md",
+    "grill-with-docs": "skills/grill-with-docs/SKILL.md"
+  },
+  "hashes": {
+    "skills/grilling/SKILL.md": "hash-grilling-v1",
+    "skills/domain-modeling/SKILL.md": "hash-domain-v1",
+    "skills/codebase-design/SKILL.md": "hash-codebase-v1",
+    "skills/grill-with-docs/SKILL.md": "hash-docs-v1"
+  },
+  "behavior_contracts": {
+    "grilling": {"summary": "ask one decision question at a time"},
+    "domain-modeling": {"summary": "sharpen canonical domain terms"},
+    "codebase-design": {"summary": "design deep modules at explicit seams"},
+    "grill-with-docs": {
+      "summary": "reference documentation-producing grill flow",
+      "role": "compatibility-reference",
+      "callable_dependency": false
+    }
+  },
+  "local_differences": ["Chinese compatibility report"],
+  "risks": [],
+  "last_test_results": {"status": "passed"}
+}

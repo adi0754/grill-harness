@@ -22,6 +22,24 @@ def run_cli(*arguments, env=None):
 
 
 class GrillHarnessCliTests(unittest.TestCase):
+    def test_argparse_errors_are_stable_json_on_stdout(self):
+        cases = (
+            ((), None),
+            (("unknown",), None),
+            (("identify",), "identify"),
+            (("identify", "--unknown"), "identify"),
+        )
+        for arguments, command in cases:
+            with self.subTest(arguments=arguments):
+                result = run_cli(*arguments)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stderr, "")
+                payload = json.loads(result.stdout)
+                self.assertFalse(payload["ok"])
+                self.assertEqual(payload["command"], command)
+                self.assertEqual(payload["error"]["type"], "usage")
+
     def test_identify_emits_project_identity_as_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "project"
@@ -111,6 +129,78 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertEqual(payload["next_eligible_phase"], "alignment")
             self.assertTrue(payload["reconciliation"]["valid"])
 
+    def test_status_blocks_guarded_current_phase_without_gate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            workflow_path = Path(temp_dir) / "state.yaml"
+            workflow_path.write_text(
+                json.dumps(
+                    {
+                        "phases": [
+                            {"id": "preflight", "status": "pending"},
+                            {"id": "implementation", "status": "in_progress"},
+                        ],
+                        "artifacts": [],
+                        "tasks": [],
+                        "evidence": [],
+                        "gates": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_cli(
+                "status",
+                "--project",
+                str(project),
+                "--workflow",
+                str(workflow_path),
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["status"], "recovery_required")
+            self.assertEqual(payload["current_phase"], "implementation")
+            self.assertIsNone(payload["next_eligible_phase"])
+            self.assertEqual(
+                payload["reconciliation"]["conflicts"][-1]["code"],
+                "PHASE_GATE",
+            )
+
+    def test_status_reports_malformed_gates_as_reconciliation_conflict(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            workflow_path = Path(temp_dir) / "state.yaml"
+            workflow_path.write_text(
+                json.dumps(
+                    {
+                        "phases": [{"id": "implementation", "status": "in_progress"}],
+                        "gates": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_cli(
+                "status",
+                "--project",
+                str(project),
+                "--workflow",
+                str(workflow_path),
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(result.stderr, "")
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "recovery_required")
+            self.assertEqual(
+                payload["reconciliation"]["conflicts"][-1]["code"],
+                "PHASE_GATE",
+            )
+
     def test_reconcile_reports_conflicts_as_machine_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workflow_path = Path(temp_dir) / "state.yaml"
@@ -135,6 +225,39 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertEqual(
                 payload["reconciliation"]["conflicts"][0]["code"],
                 "DUPLICATE_ID",
+            )
+
+    def test_reconcile_blocks_completed_guarded_phase_without_gate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_path = Path(temp_dir) / "state.yaml"
+            workflow_path.write_text(
+                json.dumps(
+                    {
+                        "phases": [
+                            {
+                                "id": "independent_assurance",
+                                "status": "completed",
+                                "artifacts": ["ART-001"],
+                                "evidence": ["EVD-001"],
+                            }
+                        ],
+                        "artifacts": [{"id": "ART-001", "status": "completed"}],
+                        "tasks": [],
+                        "evidence": [{"id": "EVD-001", "status": "completed"}],
+                        "gates": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_cli("reconcile", "--workflow", str(workflow_path))
+
+            self.assertEqual(result.returncode, 1, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(
+                payload["reconciliation"]["conflicts"][-1]["code"],
+                "PHASE_GATE",
             )
 
     def test_upstream_check_is_read_only_machine_json(self):

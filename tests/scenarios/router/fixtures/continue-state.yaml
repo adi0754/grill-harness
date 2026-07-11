@@ -1,0 +1,15 @@
+{
+  "phases": [
+    {"id": "implementation", "status": "in_progress"}
+  ],
+  "artifacts": [],
+  "tasks": [],
+  "evidence": [],
+  "gates": {
+    "final_spec_approval": {
+      "status": "approved",
+      "approval_id": "DEC-003",
+      "artifact_versions": {"spec": 1}
+    }
+  }
+}

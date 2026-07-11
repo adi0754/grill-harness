@@ -4,6 +4,7 @@
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 
@@ -15,10 +16,25 @@ import validate
 
 
 TERMINAL_PHASE_STATES = {"completed", "skipped", "superseded", "cancelled"}
+UNENTERED_PHASE_STATES = {"pending", "skipped", "superseded", "cancelled"}
 
 
 def _emit(payload):
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+class MachineJsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        parts = self.prog.split()
+        command = parts[-1] if len(parts) > 1 else None
+        _emit(
+            {
+                "ok": False,
+                "command": command,
+                "error": {"type": "usage", "message": message},
+            }
+        )
+        raise SystemExit(2)
 
 
 def _project_payload(project):
@@ -62,9 +78,28 @@ def _phase_summary(workflow, reconciliation):
             for phase_id in state.WORKFLOW_PHASES
             if phase_id in phases
             and phases[phase_id].get("status") not in TERMINAL_PHASE_STATES
+            and phases[phase_id].get("status") != "pending"
         ),
         None,
     )
+    if current is None:
+        current = next(
+            (
+                phase_id
+                for phase_id in state.WORKFLOW_PHASES
+                if phase_id in phases and phases[phase_id].get("status") == "pending"
+            ),
+            None,
+        )
+    if current is None:
+        current = next(
+            (
+                phase_id
+                for phase_id in reversed(state.WORKFLOW_PHASES)
+                if phase_id in phases and phases[phase_id].get("status") == "completed"
+            ),
+            None,
+        )
     if not reconciliation.get("valid"):
         return current, None
     gates = workflow.get("gates", {})
@@ -87,6 +122,45 @@ def _phase_summary(workflow, reconciliation):
     return current, None
 
 
+def _reconcile_workflow(workflow):
+    report = validate.reconcile_workflow(workflow)
+    conflicts = list(report.get("conflicts", ()))
+    gates = workflow.get("gates", {})
+    if not isinstance(gates, Mapping):
+        conflicts.append(
+            {
+                "code": "PHASE_GATE",
+                "conflict": "workflow gates must be a mapping",
+                "recovery_action": "stop guarded phases and restore the persisted gate mapping",
+            }
+        )
+        gates = {}
+    for phase in workflow.get("phases", ()):
+        if not isinstance(phase, dict):
+            continue
+        phase_id = phase.get("id")
+        phase_status = phase.get("status")
+        if phase_id not in state.WORKFLOW_PHASES or phase_status in UNENTERED_PHASE_STATES:
+            continue
+        try:
+            state.validate_phase_entry(phase_id, gates)
+        except (ValueError, state.StateContractError) as error:
+            conflicts.append(
+                {
+                    "code": "PHASE_GATE",
+                    "conflict": "phase {} with status {} violates its gate: {}".format(
+                        phase_id,
+                        phase_status,
+                        error,
+                    ),
+                    "recovery_action": "stop the affected phase and restore or approve the required artifact-bound gate",
+                    "phase_id": phase_id,
+                    "status": phase_status,
+                }
+            )
+    return {"valid": not conflicts, "conflicts": conflicts}
+
+
 def _identify(args):
     identity = state.identify_project(Path(args.project))
     return 0, {"ok": True, "command": "identify", "project": _project_payload(identity)}
@@ -106,7 +180,7 @@ def _reconcile(args):
     workflow = common.read_yaml(workflow_path)
     if not isinstance(workflow, dict):
         raise ValueError("workflow must be a JSON-compatible YAML mapping: {}".format(workflow_path))
-    report = validate.reconcile_workflow(workflow)
+    report = _reconcile_workflow(workflow)
     return (0 if report["valid"] else 1), {
         "ok": report["valid"],
         "command": "reconcile",
@@ -138,7 +212,7 @@ def _status(args):
     workflow = common.read_yaml(workflow_path)
     if not isinstance(workflow, dict):
         raise ValueError("workflow must be a JSON-compatible YAML mapping: {}".format(workflow_path))
-    reconciliation = validate.reconcile_workflow(workflow)
+    reconciliation = _reconcile_workflow(workflow)
     current, next_phase = _phase_summary(workflow, reconciliation)
     base.update(
         {
@@ -168,7 +242,7 @@ def _upstream_check(args):
 
 
 def _parser():
-    parser = argparse.ArgumentParser(prog="grh.py")
+    parser = MachineJsonArgumentParser(prog="grh.py")
     commands = parser.add_subparsers(dest="command", required=True)
 
     identify = commands.add_parser("identify")
