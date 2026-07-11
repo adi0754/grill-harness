@@ -39,6 +39,12 @@ def _string_sequence(value: Any) -> Optional[List[str]]:
 
 
 def _task_dependencies(task: Mapping[str, Any]) -> Tuple[Optional[List[str]], bool]:
+    if (
+        "depends_on" in task and task.get("depends_on") is None
+    ) or (
+        "blockers" in task and task.get("blockers") is None
+    ):
+        return None, False
     depends_on = _string_sequence(task.get("depends_on"))
     blockers = _string_sequence(task.get("blockers"))
     if depends_on is None or blockers is None:

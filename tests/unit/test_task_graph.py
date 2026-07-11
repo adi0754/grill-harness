@@ -168,6 +168,19 @@ class TaskGraphTests(unittest.TestCase):
         self.assertEqual(frontier_report["frontier"], [])
         self.assertFalse(parallel_report["valid"])
 
+    def test_explicit_null_dependency_fields_are_invalid_not_empty_roots(self):
+        for field in ("depends_on", "blockers"):
+            with self.subTest(field=field):
+                report = task_graph.validate_dag(
+                    [{"id": "TASK-001", "status": "pending", field: None}]
+                )
+
+                self.assertFalse(report["valid"])
+                self.assertIn(
+                    "INVALID_BLOCKERS",
+                    {item["code"] for item in report["conflicts"]},
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
