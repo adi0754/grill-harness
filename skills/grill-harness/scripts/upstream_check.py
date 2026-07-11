@@ -11,7 +11,7 @@ MANIFEST_FIELDS = (
 
 
 def build_manifest(facts, checked_at):
-    required_scalars = ("repository", "ref", "commit", "license")
+    required_scalars = ("repository", "ref", "commit", "upstream_updated_at", "license")
     missing = [field for field in required_scalars if not facts.get(field)]
     if not checked_at:
         missing.append("checked_at")

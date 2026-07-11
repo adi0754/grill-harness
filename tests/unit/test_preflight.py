@@ -39,7 +39,7 @@ class PreflightTests(unittest.TestCase):
             ("npx", "skills", "list", "-g", "--json"): {"returncode": 0, "stdout": json.dumps(global_payload)},
             ("npx", "skills", "--help"): {
                 "returncode": 0,
-                "stdout": "Usage: skills <command>\n  add <source> --skill <skills...>\n",
+                "stdout": "Usage: skills <command>\n  add <source> --skill <skills...>\n  update <skills...> [-g]\n",
             },
         }
 
@@ -135,7 +135,12 @@ class PreflightTests(unittest.TestCase):
             self.assertIn("skills add mattpocock/skills", report["install_commands"][0])
             self.assertIn("codebase-design", report["install_commands"][0])
             self.assertNotIn("requesting-code-review", report["install_commands"][0])
-            self.assertEqual(report["update_commands"], report["install_commands"])
+            self.assertEqual(
+                report["update_commands"],
+                ["npx skills update grilling domain-modeling codebase-design -g"],
+            )
+            self.assertNotIn(" add ", report["update_commands"][0])
+            self.assertIn(" update ", report["update_commands"][0])
             self.assertFalse(any(call[2:3] in (["add"], ["update"]) for call in runner.calls))
             self.assertFalse(report["actions_performed"])
             self.assertFalse(report["accepted_upstream_changes"])

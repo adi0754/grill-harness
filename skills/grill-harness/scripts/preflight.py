@@ -130,6 +130,12 @@ def _batch_command(help_text, capabilities):
     return "npx skills add mattpocock/skills --skill {}".format(" ".join(capabilities))
 
 
+def _update_command(help_text, capabilities):
+    if not help_text or not capabilities or "update <skills...>" not in help_text:
+        return None
+    return "npx skills update {} -g".format(" ".join(capabilities))
+
+
 def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
     """Discover, verify, and report capabilities without changing the system."""
 
@@ -156,9 +162,11 @@ def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
     install_commands = []
     update_commands = []
     if cli_available:
-        command = _batch_command(_safe_top_level_help(runner), missing_required)
+        help_text = _safe_top_level_help(runner)
+        command = _batch_command(help_text, missing_required)
         install_commands = [command] if command else []
-        update_commands = list(install_commands)
+        update = _update_command(help_text, REQUIRED_CAPABILITIES)
+        update_commands = [update] if update else []
     return {
         "ready": not missing_required,
         "cli": {"available": cli_available, "error": cli_error, "inventory_source": "json-first"},

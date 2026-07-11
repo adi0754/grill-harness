@@ -33,6 +33,8 @@ RED 精确暴露以下问题：
 - online 检查只有取得 remote facts 才成立；否则返回 `unavailable`。
 - manifest 对审计字段、每项 source path/hash、每项行为契约和最近测试结果 fail-closed。
 - 上游比较可同时报告 `added`、`removed`、`renamed`、`content-fix`、`content-change`、`metadata-change` 和 `behavior-contract-change`，并比较 commit 与对应路径 hash。
+- update 建议与 install 建议语义分离：前者由安全顶层 help 验证后生成 `npx skills update ... -g`，绝不复用 add 命令，也不执行该建议。
+- `upstream_updated_at` 是固定清单的非空必需时间戳；缺失或空值均失败关闭。
 
 ## 不变式
 

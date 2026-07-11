@@ -33,6 +33,7 @@ class UpstreamCheckTests(unittest.TestCase):
         required_failures = (
             {},
             dict(self._fixture("current.json"), repository=""),
+            dict(self._fixture("current.json"), upstream_updated_at=None),
             dict(self._fixture("current.json"), sources={"grilling": {"path": "x"}}),
             dict(self._fixture("current.json"), behavior_contracts={}),
             dict(self._fixture("current.json"), last_test_results={}),
@@ -42,6 +43,11 @@ class UpstreamCheckTests(unittest.TestCase):
             with self.subTest(facts=facts):
                 with self.assertRaises(ValueError):
                     upstream_check.build_manifest(facts, checked_at="2026-07-12T00:00:00Z")
+
+        missing_timestamp = self._fixture("current.json")
+        del missing_timestamp["upstream_updated_at"]
+        with self.assertRaises(ValueError):
+            upstream_check.build_manifest(missing_timestamp, checked_at="2026-07-12T00:00:00Z")
 
     def test_offline_mode_compares_local_facts_without_remote_or_mutation(self):
         previous = upstream_check.build_manifest(self._fixture("current.json"), "2026-07-11T00:00:00Z")
