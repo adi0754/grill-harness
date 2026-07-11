@@ -194,12 +194,44 @@ class ProjectIdentityTests(unittest.TestCase):
             r"file://c:\repos\origin.git",
         )
 
+    def test_windows_drive_relative_remote_is_local_not_scp_syntax(self):
+        self.assertEqual(
+            state.normalize_git_remote(
+                r"C:origin.git",
+                r"C:\work\project",
+            ),
+            r"file://c:\work\project\origin.git",
+        )
+
     def test_windows_unc_file_remote_keeps_its_server_and_share(self):
         file_url = state.normalize_git_remote("file://Server/Share/origin.git")
         native_unc = state.normalize_git_remote(r"\\Server\Share\origin.git")
 
-        self.assertEqual(file_url, "file://server/share/origin.git")
+        self.assertEqual(file_url, "file://server/Share/origin.git")
         self.assertEqual(native_unc, file_url)
+
+    def test_forward_slash_unc_folds_dot_segments_like_file_url_unc(self):
+        native_unc = state.normalize_git_remote(
+            "//Server/Share/team/../Repo.git"
+        )
+        file_url = state.normalize_git_remote(
+            "file://SERVER/Share/team/../Repo.git"
+        )
+
+        self.assertEqual(native_unc, "file://server/Share/Repo.git")
+        self.assertEqual(file_url, native_unc)
+
+    def test_non_localhost_file_remote_preserves_path_case(self):
+        upper = state.normalize_git_remote(
+            "file://Server/Share/CaseSensitive.git"
+        )
+        lower = state.normalize_git_remote(
+            "file://server/Share/casesensitive.git"
+        )
+
+        self.assertEqual(upper, "file://server/Share/CaseSensitive.git")
+        self.assertEqual(lower, "file://server/Share/casesensitive.git")
+        self.assertNotEqual(upper, lower)
 
     def test_localhost_file_remote_preserves_posix_path_case(self):
         upper = state.normalize_git_remote(
@@ -251,6 +283,26 @@ class ProjectIdentityTests(unittest.TestCase):
                 identity.directory_name,
                 "_CON.txt-{}".format(identity.project_id[:8]),
             )
+
+    def test_workflow_directory_requires_an_explicit_creation_date(self):
+        with self.assertRaises(TypeError):
+            state.workflow_directory_name(
+                "发布检查",
+                "project-123",
+                "workflow-1",
+            )
+
+    def test_network_remote_preserves_non_default_port(self):
+        default_port = state.normalize_git_remote(
+            "ssh://git@Example.com:22/Org/Repo.git"
+        )
+        non_default_port = state.normalize_git_remote(
+            "ssh://git@Example.com:2222/Org/Repo.git"
+        )
+
+        self.assertEqual(default_port, "example.com/Org/Repo")
+        self.assertEqual(non_default_port, "example.com:2222/Org/Repo")
+        self.assertNotEqual(default_port, non_default_port)
 
 
 if __name__ == "__main__":

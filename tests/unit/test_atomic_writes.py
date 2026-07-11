@@ -80,6 +80,26 @@ class AtomicWriteTests(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), previous_bytes)
             self.assertEqual(list(Path(temp_dir).glob(".state.yaml.*.tmp")), [])
 
+    def test_windows_directory_fsync_eacces_is_treated_as_unsupported(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "state.yaml"
+            common.atomic_write_yaml(destination, {"version": 1})
+            raised = None
+
+            with mock.patch.object(common, "_WINDOWS", True, create=True):
+                with mock.patch.object(
+                    common,
+                    "_fsync",
+                    side_effect=[None, OSError(errno.EACCES, "unsupported")],
+                ):
+                    try:
+                        common.atomic_write_yaml(destination, {"version": 2})
+                    except OSError as error:
+                        raised = error
+
+            self.assertIsNone(raised)
+            self.assertEqual(common.read_yaml(destination), {"version": 2})
+
 
 if __name__ == "__main__":
     unittest.main()

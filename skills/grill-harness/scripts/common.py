@@ -13,6 +13,7 @@ from typing import Any, Dict, Mapping, Optional
 
 TEST_STORAGE_ROOT_ENV = "GRILL_HARNESS_TEST_ROOT"
 TEST_ROOT_ENV = TEST_STORAGE_ROOT_ENV
+_WINDOWS = os.name == "nt"
 
 STORAGE_DIRECTORIES = {
     "config": "配置",
@@ -103,6 +104,12 @@ def _fsync(descriptor: int) -> None:
             raise
 
 
+def _directory_fsync_is_unsupported(error: OSError) -> bool:
+    if error.errno in _UNSUPPORTED_FSYNC_ERRNOS:
+        return True
+    return _WINDOWS and error.errno in {errno.EACCES, errno.EPERM}
+
+
 def _fsync_directory(directory: Path) -> None:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     descriptor = None
@@ -110,7 +117,7 @@ def _fsync_directory(directory: Path) -> None:
         descriptor = os.open(str(directory), flags)
         _fsync(descriptor)
     except OSError as error:
-        if error.errno not in _UNSUPPORTED_FSYNC_ERRNOS:
+        if not _directory_fsync_is_unsupported(error):
             raise
     finally:
         if descriptor is not None:

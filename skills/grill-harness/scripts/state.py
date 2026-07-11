@@ -4,6 +4,7 @@ import hashlib
 import json
 import ntpath
 import os
+import posixpath
 import re
 import subprocess
 import uuid
@@ -29,7 +30,11 @@ class ProjectIdentity:
 
 
 def _looks_like_windows_path(value: str) -> bool:
-    return bool(re.match(r"^[A-Za-z]:[\\/]", value)) or value.startswith("\\\\")
+    return bool(re.match(r"^[A-Za-z]:", value)) or _looks_like_unc_path(value)
+
+
+def _looks_like_unc_path(value: str) -> bool:
+    return value.startswith("\\\\") or value.startswith("//")
 
 
 def normalize_project_path(path: Path) -> str:
@@ -47,12 +52,13 @@ def normalize_git_remote(
     if not remote or not remote.strip():
         return None
     value = remote.strip()
+    if _looks_like_unc_path(value):
+        normalized = value.replace("\\", "/").lstrip("/")
+        server, separator, network_path = normalized.partition("/")
+        if separator:
+            return _canonical_network_file_remote(server, network_path)
     if _looks_like_windows_path(value):
-        normalized_path = normalize_project_path(value)
-        if normalized_path.startswith("\\\\"):
-            return "file://{}".format(
-                normalized_path.lstrip("\\").replace("\\", "/")
-            )
+        normalized_path = _normalize_windows_local_remote(value, repository_root)
         return "file://{}".format(normalized_path)
     scp_match = re.match(r"^(?:[^@/]+@)?([^:/]+):(.+)$", value)
     if scp_match and "://" not in value:
@@ -63,6 +69,11 @@ def normalize_git_remote(
     parsed = urlsplit(value)
     if parsed.scheme and parsed.scheme != "file":
         host = (parsed.hostname or "").lower()
+        if ":" in host and not host.startswith("["):
+            host = "[{}]".format(host)
+        default_ports = {"http": 80, "https": 443, "ssh": 22, "git": 9418}
+        if parsed.port and parsed.port != default_ports.get(parsed.scheme.lower()):
+            host = "{}:{}".format(host, parsed.port)
         return _clean_remote_path(host, unquote(parsed.path))
     if parsed.scheme == "file":
         file_path = unquote(parsed.path)
@@ -72,7 +83,7 @@ def normalize_git_remote(
                 if re.match(r"^/[A-Za-z]:[\\/]", file_path):
                     file_path = file_path[1:]
                 return "file://{}".format(normalize_project_path(file_path))
-            return "file://{}/{}".format(server, file_path.strip("/").lower())
+            return _canonical_network_file_remote(server, file_path)
         if re.match(r"^/[A-Za-z]:[\\/]", file_path):
             file_path = file_path[1:]
         return "file://{}".format(normalize_project_path(file_path))
@@ -81,6 +92,38 @@ def normalize_git_remote(
     if not local_path.is_absolute() and repository_root is not None:
         local_path = Path(repository_root) / local_path
     return "file://{}".format(normalize_project_path(local_path))
+
+
+def _normalize_windows_local_remote(
+    value: str,
+    repository_root: Optional[Path],
+) -> str:
+    drive, tail = ntpath.splitdrive(value)
+    is_drive_relative = bool(drive) and not tail.startswith(("\\", "/"))
+    if is_drive_relative and repository_root is not None:
+        normalized_root = normalize_project_path(repository_root)
+        root_drive, _ = ntpath.splitdrive(normalized_root)
+        if root_drive.lower() == drive.lower():
+            value = ntpath.join(normalized_root, tail)
+    return ntpath.normcase(ntpath.normpath(value))
+
+
+def _canonical_network_file_remote(server: str, network_path: str) -> str:
+    segments = network_path.replace("\\", "/").strip("/").split("/")
+    if not segments or not segments[0]:
+        return "file://{}".format(server.lower())
+    share = segments[0]
+    remainder = []
+    for segment in segments[1:]:
+        if not segment or segment == ".":
+            continue
+        if segment == "..":
+            if remainder:
+                remainder.pop()
+            continue
+        remainder.append(segment)
+    path = posixpath.join(share, *remainder)
+    return "file://{}/{}".format(server.lower(), path)
 
 
 def _clean_remote_path(host: str, repository_path: str) -> str:
@@ -216,10 +259,10 @@ def workflow_directory_name(
     workflow_name: str,
     project_identifier: str,
     workflow_key: str,
-    created_on: Optional[date] = None,
+    created_on: date,
 ) -> str:
     identifier = workflow_id(project_identifier, workflow_key)
-    workflow_date = date.today() if created_on is None else created_on
+    workflow_date = created_on
     if isinstance(workflow_date, date):
         date_segment = workflow_date.isoformat()
     else:
