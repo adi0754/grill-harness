@@ -13,6 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import common
 import knowledge
+import state
 import workflow_ops
 
 
@@ -35,6 +36,9 @@ class KnowledgeLifecycleTests(unittest.TestCase):
         return record
 
     def workflow(self, root, *, accepted=True):
+        self.project_path = Path(root) / "product"
+        self.project_path.mkdir(exist_ok=True)
+        self.current_baseline = state.current_project_baseline(self.project_path)
         workflow = Path(root) / "项目" / "示例-a1b2c3d4" / "工作流" / "2026-07-12-知识-WF001"
         for name in ("核心文档", "过程产物", "最终产物", "系统"):
             (workflow / name).mkdir(parents=True, exist_ok=True)
@@ -43,6 +47,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             "workflow_version": 1,
             "project_id": "project-a",
             "workflow_id": "WF-001",
+            "git_baseline": self.current_baseline,
             "phases": [
                 {"id": "independent_assurance", "status": "completed" if accepted else "in_progress"},
                 {"id": "knowledge_archive", "status": "pending"},
@@ -56,6 +61,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                     "status": "completed",
                     "result": "accepted",
                     "current": True,
+                    "baseline": self.current_baseline,
                 }]
                 if accepted
                 else []
@@ -196,6 +202,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                         "project-a",
                         preview=preview["path"],
                         approval_id="DEC-900",
+                        project_path=self.project_path,
                     )
             self.assertFalse(
                 (root / "知识库" / "项目知识" / "project-a" / "knowledge.yaml").exists()
@@ -224,6 +231,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                     "project-a",
                     preview=preview["path"],
                     approval_id="DEC-900",
+                    project_path=self.project_path,
                 )
 
             self.assertNotEqual(path.read_bytes(), before_apply)
@@ -321,6 +329,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                     "project-a",
                     preview=project_preview["path"],
                     approval_id="DEC-900",
+                    project_path=self.project_path,
                 )
                 general_preview = knowledge.promote_general_knowledge(
                     workflow, "project-a", [self.record()]
@@ -372,6 +381,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                     "project-a",
                     preview=project_preview["path"],
                     approval_id="DEC-900",
+                    project_path=self.project_path,
                 )
                 general_preview = knowledge.promote_general_knowledge(
                     workflow, "project-a", [self.record()]
@@ -417,6 +427,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                             "project-a",
                             preview=preview["path"],
                             approval_id="DEC-900",
+                            project_path=self.project_path,
                         )
 
             state_records = common.read_yaml(state_path)["artifacts"]
@@ -470,6 +481,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                             "project-a",
                             preview=preview["path"],
                             approval_id="DEC-900",
+                            project_path=self.project_path,
                         )
 
             after = {path: path.read_bytes() for path in tracked}
@@ -579,6 +591,124 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 with self.assertRaisesRegex(ValueError, "at least one"):
                     knowledge.promote_project_knowledge(workflow, "project-a", [])
+
+    def test_apply_rejects_preview_paths_that_are_not_canonical_for_scope_and_project(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = self.workflow(root)
+            with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
+                preview = knowledge.promote_project_knowledge(
+                    workflow, "project-a", [self.record()]
+                )
+                payload = common.read_yaml(preview["path"])
+                payload["knowledge_path"] = str(root / "知识库" / "attacker" / "knowledge.yaml")
+                core = {key: value for key, value in payload.items() if key != "preview_id"}
+                payload["preview_id"] = knowledge._preview_id(core)
+                common.atomic_write_yaml(Path(preview["path"]), payload)
+                tampered = dict(preview, preview_id=payload["preview_id"])
+                self.approve_preview(workflow, tampered, "DEC-900", "knowledge_archive")
+
+                with self.assertRaisesRegex(ValueError, "canonical knowledge path"):
+                    knowledge.promote_project_knowledge(
+                        workflow,
+                        "project-a",
+                        preview=preview["path"],
+                        approval_id="DEC-900",
+                    )
+
+            self.assertFalse((root / "知识库" / "attacker" / "knowledge.yaml").exists())
+
+    def test_route_failure_apply_validates_only_candidate_evidence_not_historical_facts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = self.workflow(root, accepted=False)
+            state_path = workflow / "系统" / "state.yaml"
+            payload = common.read_yaml(state_path)
+            payload["evidence"] = [{
+                "id": "EVD-NEW",
+                "status": "valid",
+                "currentness": "current",
+                "failure_class": "route_failure",
+                "workflow_id": "WF-001",
+            }]
+            common.atomic_write_yaml(state_path, payload)
+            common.atomic_write_yaml(
+                workflow / "系统" / "evidence.yaml",
+                {"schema_version": 1, "workflow_version": 1, "evidence": payload["evidence"]},
+            )
+            old = self.record(
+                "KNW-001",
+                type="route_failure",
+                failure_class="route_failure",
+                evidence=["EVD-OLD"],
+                trust_status="verified",
+            )
+            path = root / "知识库" / "项目知识" / "project-a" / "knowledge.yaml"
+            common.atomic_write_yaml(path, {"schema_version": 1, "records": [old]})
+            candidate = self.record(
+                "KNW-002",
+                conclusion="新路线在当前约束下失败",
+                type="route_failure",
+                failure_class="route_failure",
+                evidence=["EVD-NEW"],
+                replaces=["KNW-001"],
+            )
+            with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
+                preview = knowledge.promote_project_knowledge(
+                    workflow, "project-a", [candidate], route_failure=True
+                )
+                self.approve_preview(workflow, preview, "DEC-910", "route_failure")
+                result = knowledge.promote_project_knowledge(
+                    workflow,
+                    "project-a",
+                    preview=preview["path"],
+                    route_failure=True,
+                    failure_approval_id="DEC-910",
+                )
+
+            self.assertTrue(result["applied"])
+            self.assertEqual(
+                {item["id"] for item in common.read_yaml(path)["records"]},
+                {"KNW-001", "KNW-002"},
+            )
+
+    def test_formal_apply_fails_closed_without_typed_current_project_baseline(self):
+        for invalid_baseline in (None, True):
+            with self.subTest(invalid_baseline=invalid_baseline):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    workflow = self.workflow(root)
+                    with mock.patch.dict(
+                        os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}
+                    ):
+                        preview = knowledge.promote_project_knowledge(
+                            workflow, "project-a", [self.record()]
+                        )
+                        self.approve_preview(
+                            workflow, preview, "DEC-900", "knowledge_archive"
+                        )
+                        state_path = workflow / "系统" / "state.yaml"
+                        payload = common.read_yaml(state_path)
+                        payload["git_baseline"] = invalid_baseline
+                        payload["evidence"][0]["baseline"] = invalid_baseline
+                        common.atomic_write_yaml(state_path, payload)
+                        common.atomic_write_yaml(
+                            workflow / "系统" / "evidence.yaml",
+                            {
+                                "schema_version": 1,
+                                "workflow_version": 1,
+                                "evidence": payload["evidence"],
+                            },
+                        )
+
+                        with self.assertRaisesRegex(ValueError, "current prerequisites"):
+                            knowledge.promote_project_knowledge(
+                                workflow,
+                                "project-a",
+                                preview=preview["path"],
+                                approval_id="DEC-900",
+                                project_path=self.project_path,
+                            )
 
 
 if __name__ == "__main__":

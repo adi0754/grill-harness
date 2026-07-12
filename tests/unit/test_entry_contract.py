@@ -156,6 +156,7 @@ class EntryContractTests(unittest.TestCase):
             "grh-learn",
             {
                 "status": "active",
+                "git_baseline": "current-commit",
                 "current_phase": "knowledge_archive",
                 "next_eligible_phase": "knowledge_archive",
                 "gates": {},
@@ -166,6 +167,7 @@ class EntryContractTests(unittest.TestCase):
                     "status": "completed",
                     "result": "accepted",
                     "current": True,
+                    "baseline": "current-commit",
                 }],
                 "archive_confirmation": {"status": "approved"},
             },

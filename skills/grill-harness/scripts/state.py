@@ -256,7 +256,9 @@ def validate_phase(phase: Mapping[str, Any]) -> None:
             raise StateContractError("skipped phase requires a reason")
 
 
-def knowledge_archive_prerequisites(workflow: Mapping[str, Any]) -> list:
+def knowledge_archive_prerequisites(
+    workflow: Mapping[str, Any], current_baseline: Optional[str] = None
+) -> list:
     """Return missing facts for durable knowledge archival without mutation."""
 
     if not isinstance(workflow, Mapping):
@@ -271,6 +273,19 @@ def knowledge_archive_prerequisites(workflow: Mapping[str, Any]) -> list:
         and item.get("status") == "completed"
         for item in phases
     )
+    workflow_baseline = workflow.get("git_baseline")
+    baseline_valid = (
+        isinstance(workflow_baseline, str)
+        and bool(workflow_baseline.strip())
+        and (
+            current_baseline is None
+            or (
+                isinstance(current_baseline, str)
+                and bool(current_baseline.strip())
+                and workflow_baseline == current_baseline
+            )
+        )
+    )
     acceptance_passed = any(
         isinstance(item, Mapping)
         and item.get("kind") == "final_acceptance"
@@ -280,10 +295,10 @@ def knowledge_archive_prerequisites(workflow: Mapping[str, Any]) -> list:
             item.get("current") is True
             or item.get("currentness") == "current"
         )
-        and (
-            not isinstance(workflow.get("git_baseline"), str)
-            or item.get("baseline") == workflow.get("git_baseline")
-        )
+        and baseline_valid
+        and isinstance(item.get("baseline"), str)
+        and bool(item["baseline"].strip())
+        and item.get("baseline") == workflow_baseline
         for item in evidence
     )
     confirmation = workflow.get("archive_confirmation")
@@ -656,6 +671,68 @@ def identify_project(path: Path) -> ProjectIdentity:
     )
 
 
+def current_project_baseline(project_path, identity=None):
+    """Return the current commit or a content-sensitive dirty baseline."""
+
+    project_root = Path(project_path).expanduser().resolve()
+    project_identity = identify_project(project_root) if identity is None else identity
+    result = subprocess.run(
+        ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        head = result.stdout.strip()
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(project_root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if status.returncode == 0 and status.stdout:
+            diff = subprocess.run(
+                ["git", "-C", str(project_root), "diff", "--binary", "HEAD"],
+                capture_output=True,
+                check=False,
+            )
+            untracked = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(project_root),
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ],
+                capture_output=True,
+                check=False,
+            )
+            digest_input = bytearray(status.stdout.encode("utf-8"))
+            digest_input.extend(diff.stdout)
+            for raw_path in sorted(
+                item for item in untracked.stdout.split(b"\0") if item
+            ):
+                digest_input.extend(b"\0path:")
+                digest_input.extend(raw_path)
+                candidate = project_root / os.fsdecode(raw_path)
+                if candidate.is_file():
+                    digest_input.extend(b"\0content:")
+                    digest_input.extend(candidate.read_bytes())
+            digest = hashlib.sha256(bytes(digest_input)).hexdigest()[:16]
+            return "{}+dirty:{}".format(head, digest)
+        return head
+    return project_identity.project_id
+
+
 def workflow_id(project_identifier: str, workflow_key: str) -> str:
     return _stable_hash(
         {"project_id": project_identifier, "workflow_key": workflow_key}
@@ -701,6 +778,7 @@ __all__ = [
     "WORKFLOW_STATES",
     "can_transition",
     "create_ledger_record",
+    "current_project_baseline",
     "format_record_id",
     "identify_project",
     "new_workflow_id",

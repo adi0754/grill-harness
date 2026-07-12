@@ -37,3 +37,13 @@
 - 差异检查：`git diff --check`
 
 最终一次验证结果见提交前终端证据；所有命令均要求零失败后才提交。
+
+## 独立审查追加修复
+
+主会话在首个 Task 4 提交后又确认三项边界问题，本次追加修复：
+
+- apply 不再信任 preview 内的路径。`knowledge.py` 按 `scope + project_id` 重新推导并比对规范目标与通用知识项目源；`workflow_ops.commit_knowledge_update()` 也只接收 scope/project ID，自行推导存储路径。
+- preview 持久化本轮 `candidate_ids`。路线失败 apply 只解析这些候选对应的 evidence，不再把长期库中的历史路线失败证据带入本轮门禁。
+- `state.current_project_baseline()` 成为 CLI 与事务共享的唯一 baseline provider。正式 apply 必须传入项目路径，并在原子锁区内重新计算 current baseline；workflow baseline 与最终验收 evidence baseline 缺失、布尔或不匹配时一律失败关闭。
+
+以上三项均先以独立回归测试观察 RED，再实现最小修复并观察 GREEN。

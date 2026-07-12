@@ -464,6 +464,7 @@ def _create_promotion_preview(
         "route_failure": bool(route_failure),
         "base_store_hash": base_store_hash,
         "knowledge_path": str(knowledge_path),
+        "candidate_ids": [item["id"] for item in candidates],
         "preview": preview,
     }
     if source_path is not None:
@@ -512,6 +513,13 @@ def _load_promotion_preview(workflow_value, project_id, preview_value, scope):
     ):
         raise ValueError("knowledge preview does not belong to this project/workflow/scope")
     knowledge_path = Path(payload.get("knowledge_path", "")).resolve()
+    canonical_path = _knowledge_file(project_id, scope).resolve()
+    if knowledge_path != canonical_path:
+        raise ValueError("preview does not use the canonical knowledge path")
+    if scope == "general":
+        canonical_source = _knowledge_file(project_id, "project").resolve()
+        if Path(payload.get("source_project_path", "")).resolve() != canonical_source:
+            raise ValueError("preview does not use the canonical project knowledge source")
     if payload.get("base_store_hash") != _store_hash(knowledge_path):
         raise ValueError("knowledge store changed after preview; create a new preview")
     preview = payload.get("preview")
@@ -530,6 +538,7 @@ def promote_project_knowledge(
     approval_id=None,
     route_failure=False,
     failure_approval_id=None,
+    project_path=None,
 ):
     """Create a project preview, then apply only a preview-bound approval."""
 
@@ -548,10 +557,9 @@ def promote_project_knowledge(
     if bool(payload.get("route_failure")) != bool(route_failure):
         raise ValueError("route failure mode must match the approved preview")
     preview_report = payload["preview"]
-    promoted_ids = list(preview_report.get("additions", ())) or [
-        item["id"] for item in preview_report.get("records", ())
-        if isinstance(item, Mapping) and _knowledge_id(item.get("id"))
-    ]
+    promoted_ids = list(payload.get("candidate_ids", ()))
+    if not promoted_ids or any(not _knowledge_id(item) for item in promoted_ids):
+        raise ValueError("knowledge preview candidate_ids are invalid")
     knowledge_payload = {
         "schema_version": KNOWLEDGE_SCHEMA_VERSION,
         "records": preview_report["records"],
@@ -562,12 +570,15 @@ def promote_project_knowledge(
         evidence_ids = sorted({
             evidence_id
             for item in preview_report["records"]
-            if isinstance(item, Mapping) and item.get("type") == "route_failure"
+            if isinstance(item, Mapping)
+            and item.get("id") in set(promoted_ids)
+            and item.get("type") == "route_failure"
             for evidence_id in item.get("evidence", ())
         })
         workflow_ops.commit_knowledge_update(
             state_path,
-            payload["knowledge_path"],
+            project_id,
+            "project",
             knowledge_payload,
             preview_id=payload["preview_id"],
             approval_requirements=[(failure_approval_id, "route_failure")],
@@ -580,13 +591,15 @@ def promote_project_knowledge(
             raise ValueError("knowledge archive requires a preview-bound user approval")
         workflow_ops.commit_knowledge_update(
             state_path,
-            payload["knowledge_path"],
+            project_id,
+            "project",
             knowledge_payload,
             preview_id=payload["preview_id"],
             approval_requirements=[(approval_id, "knowledge_archive")],
             artifact_ids=promoted_ids,
             complete_archive=True,
             expected_store_hash=payload["base_store_hash"],
+            project_path=project_path,
         )
     return {
         "scope": "project",
@@ -639,7 +652,8 @@ def promote_general_knowledge(
     preview_report = payload["preview"]
     workflow_ops.commit_knowledge_update(
         state_path,
-        payload["knowledge_path"],
+        project_id,
+        "general",
         {"schema_version": KNOWLEDGE_SCHEMA_VERSION, "records": preview_report["records"]},
         preview_id=payload["preview_id"],
         approval_requirements=[
@@ -651,7 +665,6 @@ def promote_general_knowledge(
             (general_approval_id, "general_knowledge"),
         ],
         expected_store_hash=payload["base_store_hash"],
-        source_project_path=payload.get("source_project_path"),
         expected_source_hash=payload.get("source_project_hash"),
     )
     return {

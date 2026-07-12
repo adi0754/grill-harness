@@ -2,11 +2,8 @@
 """Read-only machine JSON entry point for Grill Harness."""
 
 import argparse
-import hashlib
 import json
-import os
 import shutil
-import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -128,62 +125,7 @@ def _identity_for_stored_project(identity):
 
 
 def _current_baseline(project_path, identity):
-    result = subprocess.run(
-        ["git", "-C", str(Path(project_path).expanduser().resolve()), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        head = result.stdout.strip()
-        status = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(Path(project_path).expanduser().resolve()),
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=all",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if status.returncode == 0 and status.stdout:
-            project_root = Path(project_path).expanduser().resolve()
-            diff = subprocess.run(
-                ["git", "-C", str(project_root), "diff", "--binary", "HEAD"],
-                capture_output=True,
-                check=False,
-            )
-            untracked = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(project_root),
-                    "ls-files",
-                    "--others",
-                    "--exclude-standard",
-                    "-z",
-                ],
-                capture_output=True,
-                check=False,
-            )
-            digest_input = bytearray(status.stdout.encode("utf-8"))
-            digest_input.extend(diff.stdout)
-            for raw_path in sorted(
-                item for item in untracked.stdout.split(b"\0") if item
-            ):
-                digest_input.extend(b"\0path:")
-                digest_input.extend(raw_path)
-                candidate = project_root / os.fsdecode(raw_path)
-                if candidate.is_file():
-                    digest_input.extend(b"\0content:")
-                    digest_input.extend(candidate.read_bytes())
-            digest = hashlib.sha256(bytes(digest_input)).hexdigest()[:16]
-            return "{}+dirty:{}".format(head, digest)
-        return head
-    return identity.project_id
+    return state.current_project_baseline(project_path, identity)
 
 
 def _manifest_conflicts(workflow_path, workflow):
@@ -1029,6 +971,7 @@ def _knowledge_promote(args):
             approval_id=args.approval_id,
             route_failure=args.route_failure,
             failure_approval_id=args.failure_approval_id,
+            project_path=args.project,
         )
     return 0, {
         "ok": True,

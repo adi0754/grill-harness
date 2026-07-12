@@ -239,10 +239,11 @@ class WorkflowStateMachineTests(unittest.TestCase):
 
     def test_knowledge_archive_prerequisites_require_current_acceptance_and_user_approval(self):
         workflow = {
+            "git_baseline": "current-commit",
             "phases": [{"id": "independent_assurance", "status": "completed"}],
             "evidence": [{
                 "id": "EVD-001", "kind": "final_acceptance", "status": "completed",
-                "result": "accepted", "current": True,
+                "result": "accepted", "current": True, "baseline": "current-commit",
             }],
             "archive_confirmation": {"status": "approved"},
         }

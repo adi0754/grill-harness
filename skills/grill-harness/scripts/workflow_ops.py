@@ -419,7 +419,8 @@ def _approved_preview_decision(workflow, approval_id, gate, preview_id):
 
 def commit_knowledge_update(
     workflow_value,
-    knowledge_path,
+    project_id,
+    scope,
     knowledge_payload,
     *,
     preview_id,
@@ -429,17 +430,26 @@ def commit_knowledge_update(
     route_failure=False,
     evidence_ids=(),
     expected_store_hash=None,
-    source_project_path=None,
     expected_source_hash=None,
+    project_path=None,
 ):
     """Atomically commit a knowledge store with its guarded workflow facts."""
 
     state_path = _state_path(workflow_value)
-    destination = Path(knowledge_path).expanduser().resolve()
-    try:
-        destination.relative_to(common.resolve_storage_root())
-    except ValueError:
-        raise ValueError("knowledge store must stay under ~/.grill-harness")
+    if not isinstance(project_id, str) or not project_id or any(
+        separator in project_id for separator in ("/", "\\")
+    ):
+        raise ValueError("project_id must be a safe stable identifier")
+    if scope not in {"project", "general"}:
+        raise ValueError("knowledge scope must be project or general")
+    knowledge_root = (
+        common.resolve_storage_root() / common.STORAGE_DIRECTORIES["knowledge"]
+    )
+    destination = (
+        knowledge_root / "项目知识" / project_id / "knowledge.yaml"
+        if scope == "project"
+        else knowledge_root / "通用知识" / "knowledge.yaml"
+    ).resolve()
     if not isinstance(knowledge_payload, dict):
         raise ValueError("knowledge payload must be a mapping")
     requirements = list(approval_requirements)
@@ -448,16 +458,12 @@ def commit_knowledge_update(
     knowledge_lock = destination.parent / ".knowledge.lock"
     workflow_lock = state_path.parent / ".workflow.lock"
     source = (
-        Path(source_project_path).expanduser().resolve()
-        if source_project_path is not None
+        (knowledge_root / "项目知识" / project_id / "knowledge.yaml").resolve()
+        if scope == "general"
         else None
     )
     lock_paths = {knowledge_lock, workflow_lock}
     if source is not None:
-        try:
-            source.relative_to(common.resolve_storage_root())
-        except ValueError:
-            raise ValueError("project knowledge source must stay under storage")
         lock_paths.add(source.parent / ".knowledge.lock")
     with ExitStack() as stack:
         for lock_path in sorted(lock_paths, key=lambda item: str(item)):
@@ -518,13 +524,24 @@ def commit_knowledge_update(
                         )
                     )
         elif complete_archive:
+            if project_path is None:
+                raise ValueError("knowledge archive requires the current project path")
+            project_root = Path(project_path).expanduser().resolve()
+            if not project_root.is_dir():
+                raise ValueError("knowledge archive current project path does not exist")
+            project_identity = state.identify_project(project_root)
+            current_baseline = state.current_project_baseline(
+                project_root, project_identity
+            )
             archive_approval = requirements[0][0]
             updated["archive_confirmation"] = {
                 "status": "approved",
                 "approval_id": archive_approval,
                 "preview_id": preview_id,
             }
-            missing = state.knowledge_archive_prerequisites(updated)
+            missing = state.knowledge_archive_prerequisites(
+                updated, current_baseline=current_baseline
+            )
             if missing:
                 raise ValueError(
                     "knowledge archive missing current prerequisites: {}".format(
@@ -542,6 +559,7 @@ def commit_knowledge_update(
                 and item.get("kind") == "final_acceptance"
                 and item.get("result") == "accepted"
                 and (item.get("current") is True or item.get("currentness") == "current")
+                and item.get("baseline") == current_baseline
             ]
             artifacts = copy.deepcopy(updated.get("artifacts", []))
             artifact_index = {
