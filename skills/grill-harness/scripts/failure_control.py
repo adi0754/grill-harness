@@ -16,6 +16,11 @@ FAILURE_CLASSES = frozenset(
 )
 DEFAULT_ATTEMPT_THRESHOLD = 3
 REPAIR_MODES = frozenset(("ordinary", "recovery", "route_selection", "reconcile"))
+REPAIR_APPROVAL_GATES = {
+    "recovery": "failure_recovery",
+    "route_selection": "route_selection",
+    "reconcile": "workflow_reconcile",
+}
 
 
 def _non_empty_string(value):
@@ -141,6 +146,56 @@ def approval_record_hash(record):
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def matches_new_chain_approval(
+    approval,
+    *,
+    approval_id,
+    fingerprint,
+    issue_id,
+    failure_class,
+    originating_baseline,
+    reason,
+):
+    return (
+        isinstance(approval, Mapping)
+        and approval.get("id") == approval_id
+        and approval.get("type") in {"DEC", "CHG"}
+        and approval.get("status") == "approved"
+        and approval.get("approved_by") == "user"
+        and approval.get("gate") == "new_failure_chain"
+        and approval.get("failure_fingerprint") == fingerprint
+        and approval.get("issue_id") == issue_id
+        and approval.get("failure_class") == failure_class
+        and approval.get("originating_baseline") == originating_baseline
+        and _non_empty_string(reason)
+        and approval.get("reason") == reason.strip()
+    )
+
+
+def matches_repair_approval(
+    approval,
+    *,
+    approval_id,
+    repair_mode,
+    fingerprint,
+    issue_id,
+):
+    required_gate = REPAIR_APPROVAL_GATES.get(repair_mode)
+    return (
+        required_gate is not None
+        and isinstance(approval, Mapping)
+        and approval.get("id") == approval_id
+        and approval.get("type") in {"DEC", "CHG"}
+        and approval.get("status") == "approved"
+        and approval.get("approved_by") == "user"
+        and approval.get("gate") == required_gate
+        and approval.get("repair_mode") == repair_mode
+        and approval.get("failure_fingerprint") == fingerprint
+        and approval.get("issue_id") == issue_id
+        and _non_empty_string(approval.get("reason"))
+    )
 
 
 def seal_failure_record(record, predecessor_hash):
@@ -357,6 +412,15 @@ def validate_failure_chain(records, manifest=None, *, ledger=()):
         threshold = record.get("threshold")
         if threshold != DEFAULT_ATTEMPT_THRESHOLD:
             override = record.get("threshold_override")
+            if not (
+                isinstance(override, Mapping)
+                and override.get("approval_version") is not None
+                and _non_empty_string(override.get("approval_hash"))
+            ):
+                conflicts.append(
+                    {"conflict": "threshold override requires an approval snapshot"}
+                )
+                override = None
             report = validate_threshold_override(
                 dict(override or {}, threshold=threshold),
                 ledger,
@@ -398,18 +462,21 @@ def validate_failure_chain(records, manifest=None, *, ledger=()):
                 else None
             )
             if not (
-                isinstance(approval, Mapping)
-                and approval.get("type") in {"DEC", "CHG"}
-                and approval.get("status") == "approved"
-                and approval.get("approved_by") == "user"
-                and approval.get("gate") == "new_failure_chain"
-                and approval.get("failure_fingerprint") == fingerprint
-                and approval.get("issue_id") == record.get("issue_id")
-                and approval.get("failure_class") == failure_class
-                and approval.get("originating_baseline")
-                == record.get("originating_baseline", record.get("git_baseline"))
-                and _non_empty_string(reason)
-                and approval.get("reason") == reason.strip()
+                isinstance(approval_version, int)
+                and not isinstance(approval_version, bool)
+                and approval_version > 0
+                and _non_empty_string(expected_approval_hash)
+                and matches_new_chain_approval(
+                    approval,
+                    approval_id=approval_id,
+                    fingerprint=fingerprint,
+                    issue_id=record.get("issue_id"),
+                    failure_class=failure_class,
+                    originating_baseline=record.get(
+                        "originating_baseline", record.get("git_baseline")
+                    ),
+                    reason=reason,
+                )
                 and approval_record_hash(approval) == expected_approval_hash
             ):
                 conflicts.append(
@@ -754,6 +821,9 @@ __all__ = [
     "failure_chain_key",
     "failure_chain_manifest",
     "failure_record_hash",
+    "matches_new_chain_approval",
+    "matches_repair_approval",
+    "REPAIR_APPROVAL_GATES",
     "REPAIR_MODES",
     "issue_fingerprint",
     "next_action",

@@ -432,24 +432,16 @@ def _validate_repair_task_policy(record, workflow):
         ),
         None,
     )
-    required_gate = {
-        "recovery": "failure_recovery",
-        "route_selection": "route_selection",
-        "reconcile": "workflow_reconcile",
-    }[repair_mode]
     if not (
-        isinstance(approval, dict)
-        and approval.get("type") in {"DEC", "CHG"}
-        and approval.get("status") == "approved"
-        and approval.get("approved_by") == "user"
-        and approval.get("gate") == required_gate
-        and approval.get("repair_mode") == repair_mode
-        and approval.get("failure_fingerprint") == fingerprint
-        and approval.get("issue_id") == latest.get("issue_id")
+        failure_control.matches_repair_approval(
+            approval,
+            approval_id=approval_id,
+            repair_mode=repair_mode,
+            fingerprint=fingerprint,
+            issue_id=latest.get("issue_id"),
+        )
         and failure_control.approval_record_hash(approval)
         == record.get("repair_approval_hash")
-        and isinstance(approval.get("reason"), str)
-        and approval["reason"].strip()
     ):
         raise ValueError(
             "non-ordinary repair requires a durable user approval bound to its mode and failure"
@@ -1273,18 +1265,15 @@ def record_failure_attempt(
                 None,
             )
             if not (
-                isinstance(reason, str)
-                and reason.strip()
-                and isinstance(approval, dict)
-                and approval.get("type") in {"DEC", "CHG"}
-                and approval.get("status") == "approved"
-                and approval.get("approved_by") == "user"
-                and approval.get("gate") == "new_failure_chain"
-                and approval.get("failure_fingerprint") == new_fingerprint
-                and approval.get("issue_id") == failure.get("issue_id")
-                and approval.get("failure_class") == failure.get("failure_class")
-                and approval.get("originating_baseline") == originating_baseline
-                and approval.get("reason") == reason.strip()
+                failure_control.matches_new_chain_approval(
+                    approval,
+                    approval_id=approval_id,
+                    fingerprint=new_fingerprint,
+                    issue_id=failure.get("issue_id"),
+                    failure_class=failure.get("failure_class"),
+                    originating_baseline=originating_baseline,
+                    reason=reason,
+                )
             ):
                 raise ValueError(
                     "new failure chain requires a durable user DEC/CHG bound to the new chain and reason"

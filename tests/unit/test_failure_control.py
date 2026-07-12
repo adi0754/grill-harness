@@ -407,6 +407,46 @@ class FailureControlTests(unittest.TestCase):
             failure_control.validate_failure_chain(records[1:], manifest)["valid"]
         )
 
+    def test_failure_chain_rejects_a_threshold_override_without_snapshot(self):
+        facts = {
+            "failure_class": "implementation_failure",
+            "issue_id": "ISSUE-801",
+            "failed_acceptance": ["REQ-801"],
+            "failed_command": [],
+            "originating_baseline": "origin-801",
+            "current_baseline": "current-801",
+        }
+        fingerprint = failure_control.issue_fingerprint(facts)
+        approval = {
+            "id": "DEC-801",
+            "type": "DEC",
+            "version": 1,
+            "status": "approved",
+            "approved_by": "user",
+            "failure_fingerprint": fingerprint,
+            "issue_id": "ISSUE-801",
+            "approved_threshold": 4,
+            "reason": "approve fourth attempt",
+        }
+        attempt = failure_control.record_attempt(
+            [],
+            facts,
+            threshold_override={
+                "threshold": 4,
+                "approval_id": "DEC-801",
+                "reason": "approve fourth attempt",
+            },
+            ledger=[approval],
+        )["record"]
+        attempt["threshold_override"].pop("approval_version")
+        attempt["threshold_override"].pop("approval_hash")
+        sealed = failure_control.seal_failure_record(attempt, None)
+
+        report = failure_control.validate_failure_chain([sealed], ledger=[approval])
+
+        self.assertFalse(report["valid"])
+        self.assertIn("snapshot", report["conflicts"][0]["conflict"])
+
 
 if __name__ == "__main__":
     unittest.main()
