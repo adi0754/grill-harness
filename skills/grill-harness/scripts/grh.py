@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import common
+import entry_contract
 import migration
 import preflight
 import state
@@ -725,6 +726,30 @@ def _status(args):
     return (0 if reconciliation["valid"] else 1), base
 
 
+def _entry_check(args):
+    """Report entry eligibility without initializing or transitioning workflow state."""
+
+    preflight_report = preflight.run_preflight(skill_roots=())
+    _, status_report = _status(args)
+    decision = entry_contract.evaluate_entry_request(
+        args.entry,
+        status_report,
+        status_report["reconciliation"],
+        requested_scope=tuple(args.requested_scope),
+    )
+    control = entry_contract.entry_control_summary(args.entry, status_report, decision)
+    return (0 if decision["eligible"] else 1), {
+        "ok": decision["eligible"],
+        "command": "entry-check",
+        "project": status_report["project"],
+        "workflow_path": status_report["workflow_path"],
+        "preflight": preflight_report,
+        "status": status_report,
+        "decision": decision,
+        "control": control,
+    }
+
+
 def _upstream_check(args):
     default_manifest = Path(__file__).resolve().parent.parent / "references" / "上游清单.yaml"
     previous_path = (
@@ -859,6 +884,13 @@ def _parser():
     status.add_argument("--project", required=True)
     status.add_argument("--workflow")
     status.set_defaults(handler=_status)
+
+    entry_check = commands.add_parser("entry-check")
+    entry_check.add_argument("--entry", choices=sorted(entry_contract.PUBLIC_ENTRIES), required=True)
+    entry_check.add_argument("--project", required=True)
+    entry_check.add_argument("--workflow")
+    entry_check.add_argument("--requested-scope", action="append", default=[])
+    entry_check.set_defaults(handler=_entry_check)
 
     reconcile = commands.add_parser("reconcile")
     reconcile.add_argument("--workflow", required=True)

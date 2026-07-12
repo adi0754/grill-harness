@@ -22,6 +22,101 @@ def run_cli(*arguments, env=None):
 
 
 class GrillHarnessCliTests(unittest.TestCase):
+    def test_entry_check_allows_start_for_not_started_project_without_writes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({"GRILL_HARNESS_TEST_ROOT": str(root), "PATH": ""})
+
+            result = run_cli(
+                "entry-check", "--entry", "grh-start", "--project", str(project), env=env
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["decision"]["eligible"])
+            self.assertEqual(payload["status"]["status"], "not_started")
+            self.assertFalse(payload["decision"]["will_auto_route"])
+            self.assertFalse(root.exists())
+
+    def test_entry_check_blocks_run_when_workflow_has_not_started(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({"GRILL_HARNESS_TEST_ROOT": str(root), "PATH": ""})
+
+            result = run_cli(
+                "entry-check", "--entry", "grh-run", "--project", str(project), env=env
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["decision"]["reason_code"], "workflow_not_started")
+            self.assertEqual(payload["decision"]["recommended_entry"], "grh-start")
+            self.assertFalse(root.exists())
+
+    def test_entry_check_blocks_run_without_final_spec_approval_and_does_not_mutate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            initialized = run_cli(
+                "init", "--project", str(project), "--workflow-name", "检查",
+                "--created-date", "2026-07-12", env=env,
+            )
+            workflow = Path(json.loads(initialized.stdout)["workflow_path"])
+            before = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
+            env["PATH"] = "/usr/bin:/bin"
+
+            result = run_cli(
+                "entry-check", "--entry", "grh-run", "--project", str(project),
+                "--workflow", str(workflow), env=env,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertIn("final_spec_approval", payload["decision"]["missing_prerequisites"])
+            after = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
+            self.assertEqual(after, before)
+
+    def test_entry_check_review_only_scope_excludes_final_acceptance_without_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            initialized = run_cli(
+                "init", "--project", str(project), "--workflow-name", "检查",
+                "--created-date", "2026-07-12", env=env,
+            )
+            workflow = Path(json.loads(initialized.stdout)["workflow_path"])
+            before = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
+            env["PATH"] = "/usr/bin:/bin"
+
+            result = run_cli(
+                "entry-check", "--entry", "grh-check", "--project", str(project),
+                "--workflow", str(workflow), "--requested-scope", "review", env=env,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["decision"]["allowed_scope"], ["review"])
+            self.assertNotIn("final_acceptance", payload["decision"]["allowed_scope"])
+            self.assertFalse(payload["decision"]["will_auto_route"])
+            after = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
+            self.assertEqual(after, before)
+
     def test_argparse_errors_are_stable_json_on_stdout(self):
         cases = (
             ((), None),
