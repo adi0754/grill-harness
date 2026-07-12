@@ -4,6 +4,8 @@ Status: **unverified**.
 
 The CLI executable was available, but the fresh isolated `CODEX_HOME` intentionally contained no user credentials. The authentication probe exited `1` and reported HTTP `401 Unauthorized: Missing bearer or basic authentication in header`. Per the Task 9 contract, no behavioral scenario or startup-prompt check is scored as a pass when the runtime cannot obtain a model response. User credentials were not read or copied.
 
+The eight additional V2 scenarios (`requirement-only-scope`, `non-recommended-route`, `review-only`, `unaccepted-archive`, `third-repeated-failure`, `route-failure-reselection`, `knowledge-reuse`, and `upstream-read-only`) were added after this isolated run. They are definition-only and unverified; no result file or model pass is claimed for them.
+
 Persisted raw evidence normalizes the temporary root, thread ID, request IDs, and cf-ray values while preserving the HTTP status and authentication error type.
 
 | Scenario | Result | Score |

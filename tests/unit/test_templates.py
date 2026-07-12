@@ -117,6 +117,77 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("不得零确认编码", text)
         self.assertIn("每个新会话只解决一个调查或决策问题", text)
 
+    def test_v2_workflow_references_document_the_enforced_runtime_contract(self):
+        state_machine = (REFERENCES / "工作流状态机.md").read_text(encoding="utf-8")
+        stage = (REFERENCES / "阶段执行协议.md").read_text(encoding="utf-8")
+        artifacts = (REFERENCES / "文档与产物契约.md").read_text(encoding="utf-8")
+        assurance = (REFERENCES / "测试与验收.md").read_text(encoding="utf-8")
+
+        self.assertIn("自适应需求雷达", state_machine)
+        self.assertLess(state_machine.index("自适应需求雷达"), state_machine.index("需求基线"))
+        self.assertIn("三个门禁仍分别批准", state_machine)
+        self.assertNotIn("将三者合并为一次明确授权", state_machine)
+
+        for marker in (
+            "需求雷达.md",
+            "问题与发现.yaml",
+            "相似实现对照.md",
+            "用户选择调查 Agent",
+            "不得自动串联",
+            "最终规格批准后生成执行 Frontier 并停止",
+            "grh-run",
+            "grh-check",
+        ):
+            self.assertIn(marker, stage)
+
+        for marker in (
+            "过程产物/需求审问/需求雷达.md",
+            "过程产物/需求审问/问题与发现.yaml",
+            "过程产物/需求审问/相似实现对照.md",
+            "过程产物/学习草稿/",
+            "知识库/项目知识/",
+            "知识库/通用知识/",
+            "failures.yaml",
+            "review_history",
+        ):
+            self.assertIn(marker, artifacts)
+
+        for failure_class in (
+            "implementation_failure",
+            "route_failure",
+            "evidence_failure",
+            "workflow_integrity_failure",
+        ):
+            self.assertIn(failure_class, assurance)
+        self.assertIn("第三次", assurance)
+        self.assertIn("failure-record", assurance)
+        self.assertIn("review_history", assurance)
+        self.assertIn("可选建议", assurance)
+
+    def test_readme_documents_all_entries_verified_install_and_knowledge_boundaries(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for entry in (
+            "grill-harness",
+            "grh-start",
+            "grh-plan",
+            "grh-run",
+            "grh-check",
+            "grh-recover",
+            "grh-learn",
+            "grh-upstream-check",
+        ):
+            self.assertIn(entry, readme)
+        self.assertIn("-s '*'", readme)
+        self.assertIn("缺少主内核", readme)
+        self.assertIn("knowledge-query", readme)
+        self.assertIn("knowledge-draft", readme)
+        self.assertIn("knowledge-promote", readme)
+        self.assertIn("项目知识", readme)
+        self.assertIn("通用知识", readme)
+        self.assertIn("只读", readme)
+        self.assertIn("不会安装或更新", readme)
+        self.assertNotIn("合并三个门禁", readme)
+
     def test_route_card_stops_before_selection_and_repository_challenge_is_conclusive(self):
         route = self.read("路线卡.md")
         self.assertIn("选择前停止", route)

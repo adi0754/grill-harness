@@ -3,6 +3,8 @@
 Generated: 2026-07-11T20:21:41.442616+00:00
 
 All eight invocations used a distinct isolated HOME, Skill copy, read-only fixture Git repository, and disabled session persistence.
+
+The eight additional V2 scenarios (`requirement-only-scope`, `non-recommended-route`, `review-only`, `unaccepted-archive`, `third-repeated-failure`, `route-failure-reselection`, `knowledge-reuse`, and `upstream-read-only`) were added after this isolated run. They are definition-only and unverified; no result directory or model pass is claimed for them.
 The runner did not copy credentials or touch the real `~/.grill-harness`.
 Persisted evidence uses stable placeholders for temporary roots, session IDs, UUIDs, request IDs, and cf-ray values; authentication status and exit evidence remain intact.
 

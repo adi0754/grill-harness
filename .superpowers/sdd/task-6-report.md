@@ -1,42 +1,78 @@
-# Task 6 实施报告：依赖预检与上游兼容跟踪
+# Task 6 Report — Shared Protocols, README, and Runtime Scenarios
 
-## 范围
+Date: 2026-07-12
 
-本任务实现只读依赖预检、固定上游清单与兼容性分类。未修改 `SKILL.md`，未执行安装、更新、覆盖或接受上游变更。
+## Outcome
 
-## 危险路径 RED 证据
+Updated the public documentation and reproducible scenario contracts to match the V2 implementation already enforced by Tasks 1–5:
 
-审查后先补充回归测试，并运行：
+- one Router plus seven thin public entries;
+- verified wildcard install syntax `-s '*'` and fail-closed missing-core recovery;
+- adaptive requirements radar and analogue comparison before baseline approval;
+- three separately approved human gates even in lightweight mode;
+- user-selected investigation Agents and no automatic public-entry chaining;
+- `grh-plan`, `grh-run`, and `grh-check` stop/isolation boundaries;
+- four persisted failure classes, append-only failure manifest, third-attempt recovery, and append-only review convergence;
+- read-only knowledge reuse, tentative drafts, project promotion, and a separately approved general-knowledge promotion;
+- rejected formal archive before accepted assurance;
+- strictly read-only upstream checking with update actions outside the entry.
 
-```text
-python -m unittest discover -s tests -p 'test_preflight.py'
-python -m unittest discover -s tests -p 'test_upstream_check.py'
+Added eight V2 scenarios to Router, Codex, and Claude Code definitions:
+
+1. requirement-only scope;
+2. non-recommended route selection;
+3. review-only;
+4. unaccepted archive rejection;
+5. third repeated implementation failure;
+6. route-failure reselection;
+7. knowledge reuse;
+8. upstream read-only action boundary.
+
+The new real-model scenarios were not executed. Existing Codex and Claude Code evidence summaries now explicitly mark the additional V2 scenarios as definition-only and unverified; no model pass is claimed.
+
+## Documentation TDD evidence
+
+RED command:
+
+```bash
+python3 -m unittest tests.unit.test_templates tests.unit.test_router_scenarios -v
 ```
 
-RED 精确暴露以下问题：
+Observed RED: 17 tests ran with 2 assertion failures and missing-file errors for all eight new Router scenarios. The failures specifically showed the old README still documented a single entry and merged lightweight gates, while shared references lacked the V2 radar/knowledge/failure contracts.
 
-- 旧实现调用 `npx skills add --help` 与 `npx skills update --help`；新的 FakeRunner 不提供这些危险探测，测试因此报错。
-- CLI 不可用时，旧实现不能按带 scope 的标准根目录完成 filesystem fallback。
-- CLI 成功时，旧实现错误地把未报告的文件系统 Skill 加入 inventory。
-- 正文中的 `name:` 会被旧实现误判为 YAML 元数据。
-- 远端 loader 没有返回 facts 时，旧报告仍声称 `online`。
-- 缺失 repository、source hash、behavior contract 或 test result 时，旧 manifest 不会失败关闭。
-- 重命名使用 `continue`，吞掉同一能力的行为契约与内容哈希变化；新增、删除和 commit 变化也未独立分类。
+GREEN command:
 
-## 修复结果
+```bash
+python3 -m unittest tests.unit.test_templates tests.unit.test_router_scenarios tests.unit.test_codex_scenarios tests.unit.test_claude_code_scenarios -v
+```
 
-- CLI discovery 只执行安全只读命令：project `npx skills list --json`、global `npx skills list -g --json`，以及顶层 `npx skills --help`。
-- 永不调用 add/update 子命令进行探测。安装建议使用已验证 source `mattpocock/skills`，只为缺失的 required capabilities 生成一条批量命令。
-- CLI discovery 成功时，文件系统只验证 CLI 报告路径；仅 CLI unavailable 时从带 project/global scope 的根目录 fallback。
-- metadata name 只从文件开头的 YAML frontmatter 解析。
-- 所有报告显式返回 `actions_performed: false` 与 `accepted_upstream_changes: false`。
-- online 检查只有取得 remote facts 才成立；否则返回 `unavailable`。
-- manifest 对审计字段、每项 source path/hash、每项行为契约和最近测试结果 fail-closed。
-- 上游比较可同时报告 `added`、`removed`、`renamed`、`content-fix`、`content-change`、`metadata-change` 和 `behavior-contract-change`，并比较 commit 与对应路径 hash。
-- update 建议与 install 建议语义分离：前者由安全顶层 help 验证后生成 `npx skills update ... -g`，绝不复用 add 命令，也不执行该建议。
-- `upstream_updated_at` 是固定清单的非空必需时间戳；缺失或空值均失败关闭。
-- 顶层 help 解析 fixture 来自本机 `npx skills --help` 的真实片段，支持当前 `update [skills...]`，同时兼容方括号、尖括号和无括号的 skills 占位写法；探测仍只读取顶层 help。
+Result: 24 tests passed.
 
-## 不变式
+Full unit verification:
 
-预检和上游检查均为只读模块。生成的命令只是用户审核建议，不会被模块执行；观察到的上游事实不会被自动写入、接受或应用。
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
+```
+
+Result: 292 tests passed.
+
+Formatting verification:
+
+```bash
+git diff --check
+```
+
+Result: passed with no output.
+
+## Install verification note
+
+`tests/integration/test_skills_install.sh` was re-run. The local repository discovery and eight-entry `-s '*'` installation completed successfully in the isolated HOME. The later external `mattpocock/skills` clone could not complete during this run because of external GitHub rate/network availability, so this run is not reported as a full integration PASS. The README claim is also backed by the previously committed Task 2 integration evidence and the unchanged executable integration contract.
+
+## Self-review
+
+- Removed stale “single public skill” and “merge lightweight gates” language.
+- Distinguished the human-readable radar/archive steps from the twelve machine phases in `state.py`.
+- Confirmed documented CLI command names and options against current `grh.py --help`.
+- Confirmed all automatic install/update/chaining mentions are prohibitions, not promises.
+- Confirmed no personal paths or credentials were added.
+- Confirmed no result artifact claims the eight new model scenarios passed.

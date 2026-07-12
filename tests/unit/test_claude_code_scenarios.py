@@ -43,6 +43,14 @@ class ClaudeCodeScenarioEvidenceTests(unittest.TestCase):
             "unsafe-parallelism",
             "missing-evidence",
             "upstream-change",
+            "requirement-only-scope",
+            "non-recommended-route",
+            "review-only",
+            "unaccepted-archive",
+            "third-repeated-failure",
+            "route-failure-reselection",
+            "knowledge-reuse",
+            "upstream-read-only",
         )
         for scenario in scenarios:
             with self.subTest(scenario=scenario):
@@ -73,6 +81,8 @@ class ClaudeCodeScenarioEvidenceTests(unittest.TestCase):
         self.assertIn("未验证", summary)
         self.assertIn("Not logged in", summary)
         self.assertNotIn("| PASS |", summary)
+        self.assertIn("additional V2 scenarios", summary)
+        self.assertIn("definition-only and unverified", summary)
 
         for scenario in (
             "light-bug",

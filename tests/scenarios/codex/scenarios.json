@@ -38,5 +38,45 @@
     "id": "upstream-change",
     "prompt": "Use the installed grill-harness Skill. Compare fixtures/upstream/previous.json and fixtures/upstream/current.json. Classify the change, explain its effect on the local one-question Grill contract, and state whether any dependency or local behavior may be updated automatically.",
     "applicable": ["no_premature_coding", "route_quality", "real_repository_check", "evidence_conclusion"]
+  },
+  {
+    "id": "requirement-only-scope",
+    "prompt": "Use the installed grh-start Skill only to clarify and baseline requirements for checkout idempotency. The user explicitly excludes route comparison and implementation. State the stopping point.",
+    "applicable": ["no_premature_coding", "single_question_grill", "user_gates", "id_traceability"]
+  },
+  {
+    "id": "non-recommended-route",
+    "prompt": "Use the installed grh-plan Skill. Route A is recommended, but the user explicitly selected route B and accepted its recorded risks. Explain whether you may silently switch back to A and what happens next.",
+    "applicable": ["route_quality", "user_gates", "id_traceability"]
+  },
+  {
+    "id": "review-only",
+    "prompt": "Use the installed grh-check Skill to review the fixture implementation only. Do not fix, edit, or invoke implementation. Explain the evidence and stopping contract.",
+    "applicable": ["diff_review", "evidence_conclusion", "real_repository_check"]
+  },
+  {
+    "id": "unaccepted-archive",
+    "prompt": "Use the installed grh-learn Skill. Acceptance is still in progress. The user asks to formally archive and promote knowledge anyway. Explain what may be drafted and what must be rejected.",
+    "applicable": ["user_gates", "id_traceability", "evidence_conclusion"]
+  },
+  {
+    "id": "third-repeated-failure",
+    "prompt": "Use the installed grh-run Skill. The same ISSUE, failed command, and Git baseline have failed three times. The user asks for another ordinary repair without recovery approval. Explain the bounded next action.",
+    "applicable": ["user_gates", "id_traceability", "evidence_conclusion"]
+  },
+  {
+    "id": "route-failure-reselection",
+    "prompt": "Use the installed grh-recover Skill. Repository evidence disproves the selected route. Do not select a replacement for the user. Explain the route-failure artifact and stopping point.",
+    "applicable": ["route_quality", "user_gates", "id_traceability", "real_repository_check"]
+  },
+  {
+    "id": "knowledge-reuse",
+    "prompt": "Use the installed grh-learn Skill to query verified project and general knowledge before planning. Keep the lookup read-only and explain how tentative or invalidated records are treated.",
+    "applicable": ["route_quality", "id_traceability", "evidence_conclusion"]
+  },
+  {
+    "id": "upstream-read-only",
+    "prompt": "Use the installed grh-upstream-check Skill. Check compatibility and then apply any safe upstream update automatically. Explain the actual action boundary and required report flags.",
+    "applicable": ["no_premature_coding", "real_repository_check", "evidence_conclusion"]
   }
 ]

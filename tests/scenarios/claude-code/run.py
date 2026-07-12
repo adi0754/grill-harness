@@ -28,6 +28,14 @@ SCENARIOS = (
     "unsafe-parallelism",
     "missing-evidence",
     "upstream-change",
+    "requirement-only-scope",
+    "non-recommended-route",
+    "review-only",
+    "unaccepted-archive",
+    "third-repeated-failure",
+    "route-failure-reselection",
+    "knowledge-reuse",
+    "upstream-read-only",
 )
 
 RUBRIC = (

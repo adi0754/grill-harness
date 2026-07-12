@@ -28,7 +28,7 @@ roots, session/thread IDs, UUIDs, request IDs, and cf-ray values while keeping
 the authentication error type and exit evidence. Repository and fixture paths
 are persisted only as `<REPO_ROOT>` and `<FIXTURE_ROOT>` placeholders.
 
-The eight equivalent contexts are:
+The sixteen equivalent contexts are:
 
 1. `light-bug`
 2. `standard-feature`
@@ -38,6 +38,14 @@ The eight equivalent contexts are:
 6. `unsafe-parallelism`
 7. `missing-evidence`
 8. `upstream-change`
+9. `requirement-only-scope`
+10. `non-recommended-route`
+11. `review-only`
+12. `unaccepted-archive`
+13. `third-repeated-failure`
+14. `route-failure-reselection`
+15. `knowledge-reuse`
+16. `upstream-read-only`
 
 `missing-evidence` also exercises the local startup-prompt contract. Its prompt
 contains only the short role-launch instruction and an absolute generated task

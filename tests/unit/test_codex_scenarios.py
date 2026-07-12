@@ -22,6 +22,14 @@ class CodexScenarioEvidenceTests(unittest.TestCase):
                 "unsafe-parallelism",
                 "missing-evidence",
                 "upstream-change",
+                "requirement-only-scope",
+                "non-recommended-route",
+                "review-only",
+                "unaccepted-archive",
+                "third-repeated-failure",
+                "route-failure-reselection",
+                "knowledge-reuse",
+                "upstream-read-only",
             ],
         )
         self.assertTrue(all(item["applicable"] for item in scenarios))
@@ -49,12 +57,17 @@ class CodexScenarioEvidenceTests(unittest.TestCase):
         self.assertIn("unverified", score)
         self.assertIn("Missing bearer or basic authentication", score)
         self.assertNotIn("| PASS |", score)
-        for item in json.loads((SCENARIO_DIR / "scenarios.json").read_text(encoding="utf-8")):
+        scenarios = json.loads((SCENARIO_DIR / "scenarios.json").read_text(encoding="utf-8"))
+        for item in scenarios[:8]:
             self.assertTrue((RESULTS_DIR / "final" / f'{item["id"]}.md').is_file())
             self.assertEqual(
                 (RESULTS_DIR / "raw" / f'{item["id"]}.exit').read_text(encoding="utf-8").strip(),
                 "UNVERIFIED",
             )
+        self.assertIn("additional V2 scenarios", score)
+        self.assertIn("definition-only and unverified", score)
+        for item in scenarios[8:]:
+            self.assertFalse((RESULTS_DIR / "final" / f'{item["id"]}.md').exists())
         self.assertEqual(
             (RESULTS_DIR / "raw" / "startup-prompt.exit").read_text(encoding="utf-8").strip(),
             "UNVERIFIED",
