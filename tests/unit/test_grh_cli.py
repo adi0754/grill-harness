@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,79 @@ def run_cli(*arguments, env=None):
     )
 
 
+def run_cli_at(cli, *arguments, env=None):
+    return subprocess.run(
+        [sys.executable, str(cli), *arguments],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
 class GrillHarnessCliTests(unittest.TestCase):
+    def _isolated_harness(self, root, entries):
+        skills_root = Path(root) / "skills"
+        source_root = REPO_ROOT / "skills"
+        for entry in entries:
+            shutil.copytree(source_root / entry, skills_root / entry)
+        return skills_root, skills_root / "grill-harness" / "scripts" / "grh.py"
+
+    def test_entry_check_blocks_when_public_installation_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            _, cli = self._isolated_harness(base, ("grill-harness", "grh-start"))
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({"GRILL_HARNESS_TEST_ROOT": str(base / "storage"), "PATH": ""})
+
+            result = run_cli_at(
+                cli, "entry-check", "--entry", "grh-start", "--project", str(project),
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["preflight"]["entry_ready"])
+            self.assertEqual(payload["decision"]["reason_code"], "harness_installation_incomplete")
+            self.assertIn("grh-plan", payload["decision"]["missing_prerequisites"])
+            self.assertFalse((base / "storage").exists())
+
+    def test_entry_check_blocks_when_thin_entry_contract_is_incompatible(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            skills_root, cli = self._isolated_harness(base, entries)
+            run_skill = skills_root / "grh-run" / "SKILL.md"
+            run_skill.write_text(
+                run_skill.read_text(encoding="utf-8").replace(
+                    "entry_core_contract_version: 1", "entry_core_contract_version: 999"
+                ),
+                encoding="utf-8",
+            )
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({"GRILL_HARNESS_TEST_ROOT": str(base / "storage"), "PATH": ""})
+
+            result = run_cli_at(
+                cli, "entry-check", "--entry", "grh-run", "--project", str(project),
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["preflight"]["harness_installation"]["incompatible_entries"],
+                ["grh-run"],
+            )
+            self.assertEqual(payload["decision"]["reason_code"], "harness_contract_incompatible")
+            self.assertFalse((base / "storage").exists())
+
     def test_entry_check_allows_start_for_not_started_project_without_writes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)

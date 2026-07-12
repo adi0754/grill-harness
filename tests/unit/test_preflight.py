@@ -26,6 +26,17 @@ class FakeRunner:
 
 
 class PreflightTests(unittest.TestCase):
+    PUBLIC_ENTRIES = (
+        "grill-harness",
+        "grh-start",
+        "grh-plan",
+        "grh-run",
+        "grh-check",
+        "grh-recover",
+        "grh-learn",
+        "grh-upstream-check",
+    )
+
     def _skill(self, root, name, metadata_name=None):
         path = Path(root) / name
         path.mkdir(parents=True)
@@ -43,6 +54,180 @@ class PreflightTests(unittest.TestCase):
                 "stdout": (FIXTURES / "skills-help.txt").read_text(encoding="utf-8"),
             },
         }
+
+    def _public_installation(
+        self, root, contract_version=1, metadata_names=None, entry_versions=None
+    ):
+        metadata_names = metadata_names or {}
+        entry_versions = entry_versions or {}
+        entries = []
+        for name in self.PUBLIC_ENTRIES:
+            path = self._skill(root, name, metadata_name=metadata_names.get(name))
+            path.joinpath("SKILL.md").write_text(
+                "---\nname: {}\nentry_core_contract_version: {}\n---\n".format(
+                    metadata_names.get(name, name), entry_versions.get(name, 1)
+                ),
+                encoding="utf-8",
+            )
+            entries.append({"name": name, "path": str(path)})
+        contract = Path(root) / "grill-harness" / "references" / "入口内核契约.json"
+        contract.parent.mkdir(parents=True)
+        contract.write_text(
+            json.dumps({
+                "contract_version": contract_version,
+                "entries": {name: {} for name in self.PUBLIC_ENTRIES},
+            }),
+            encoding="utf-8",
+        )
+        return entries
+
+    def test_complete_public_installation_is_entry_ready_without_changing_dependency_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            public_entries = self._public_installation(root)
+            dependencies = [
+                {"name": name, "path": str(self._skill(root, name))}
+                for name in preflight.REQUIRED_CAPABILITIES
+            ]
+            runner = FakeRunner(self._safe_cli_responses(
+                {"skills": public_entries + dependencies}, {"skills": []}
+            ))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-plan",
+            )
+
+            self.assertTrue(report["ready"])
+            self.assertTrue(report["entry_ready"])
+            self.assertTrue(report["overall_ready"])
+            self.assertEqual(report["harness_installation"]["missing_entries"], [])
+            self.assertEqual(
+                report["harness_installation"]["core_path"],
+                str(root / "grill-harness"),
+            )
+            self.assertTrue(report["harness_installation"]["contract_compatible"])
+            self.assertFalse(report["actions_performed"])
+
+    def test_incomplete_public_installation_reports_every_missing_entry_and_keeps_ready_semantics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            learn = self._skill(root, "grh-learn")
+            dependencies = [
+                {"name": name, "path": str(self._skill(root, name))}
+                for name in preflight.REQUIRED_CAPABILITIES
+            ]
+            runner = FakeRunner(self._safe_cli_responses(
+                {"skills": [{"name": "grh-learn", "path": str(learn)}] + dependencies},
+                {"skills": []},
+            ))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-learn",
+            )
+
+            self.assertTrue(report["ready"])
+            self.assertFalse(report["entry_ready"])
+            self.assertFalse(report["overall_ready"])
+            self.assertIn("grill-harness", report["harness_installation"]["missing_entries"])
+            self.assertIsNone(report["harness_installation"]["core_path"])
+            self.assertFalse(report["harness_installation"]["contract_compatible"])
+            self.assertFalse(report["actions_performed"])
+
+    def test_wrong_public_entry_frontmatter_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = self._public_installation(
+                root, metadata_names={"grh-check": "wrong-name"}
+            )
+            runner = FakeRunner(self._safe_cli_responses({"skills": entries}, {"skills": []}))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-check",
+            )
+
+            self.assertFalse(report["entry_ready"])
+            self.assertIn("grh-check", report["harness_installation"]["missing_entries"])
+            check = next(
+                item for item in report["harness_installation"]["entries"]
+                if item["name"] == "grh-check"
+            )
+            self.assertEqual(check["status"], "stale-metadata")
+
+    def test_incompatible_core_contract_blocks_entry_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = self._public_installation(root, contract_version=999)
+            runner = FakeRunner(self._safe_cli_responses({"skills": entries}, {"skills": []}))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-run",
+            )
+
+            self.assertFalse(report["entry_ready"])
+            self.assertFalse(report["harness_installation"]["contract_compatible"])
+            self.assertEqual(report["harness_installation"]["contract_version"], 999)
+
+    def test_incompatible_thin_entry_contract_blocks_entry_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = self._public_installation(
+                root, entry_versions={"grh-run": 999}
+            )
+            runner = FakeRunner(self._safe_cli_responses({"skills": entries}, {"skills": []}))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-run",
+            )
+
+            self.assertFalse(report["entry_ready"])
+            self.assertFalse(report["harness_installation"]["contract_compatible"])
+            self.assertEqual(
+                report["harness_installation"]["incompatible_entries"], ["grh-run"]
+            )
+
+    def test_public_entries_use_cli_success_and_filesystem_fallback_for_failed_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = self._public_installation(root)
+            project_entries = entries[:4]
+            global_entries = entries[4:]
+            runner = FakeRunner({
+                ("npx", "skills", "list", "--json"): {
+                    "returncode": 0,
+                    "stdout": json.dumps({"skills": project_entries}),
+                },
+                ("npx", "skills", "list", "-g", "--json"): {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "global unavailable",
+                },
+            })
+
+            report = preflight.run_preflight(
+                skill_roots={"global": [root]},
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-start",
+            )
+
+            self.assertTrue(report["entry_ready"])
+            scopes = {
+                item["name"]: item["scope"]
+                for item in report["harness_installation"]["entries"]
+            }
+            self.assertEqual(scopes["grill-harness"], "project")
+            self.assertEqual(scopes["grh-upstream-check"], "global")
+            self.assertFalse(report["actions_performed"])
 
     def test_cli_json_is_consulted_first_then_global_and_project_paths_are_verified(self):
         with tempfile.TemporaryDirectory() as directory:

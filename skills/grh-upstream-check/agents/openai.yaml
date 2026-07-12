@@ -1,0 +1,4 @@
+interface:
+  display_name: "GRH Upstream Check"
+  short_description: "只读检查依赖与上游兼容性"
+  default_prompt: "使用 $grh-upstream-check 只读检查依赖和上游兼容性；不要安装、更新或接受变化。"

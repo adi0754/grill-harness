@@ -1,0 +1,4 @@
+interface:
+  display_name: "GRH Learn"
+  short_description: "查经验、复盘并经确认归档知识"
+  default_prompt: "使用 $grh-learn 查找相关经验或复盘；长期知识写入前必须等待我确认。"

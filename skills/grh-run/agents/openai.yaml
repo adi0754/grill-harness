@@ -1,0 +1,4 @@
+interface:
+  display_name: "GRH Run"
+  short_description: "执行已批准任务并运行修复循环"
+  default_prompt: "使用 $grh-run 执行已批准规格的授权任务；不要进行最终验收或自行换路。"

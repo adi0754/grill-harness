@@ -7,11 +7,12 @@ ROUTER_DIR = REPO_ROOT / "tests" / "scenarios" / "router"
 
 
 class RouterScenarioEvidenceTests(unittest.TestCase):
-    def test_router_uses_init_for_first_mutating_use(self):
+    def test_router_recommends_public_entry_without_initializing(self):
         router = (REPO_ROOT / "skills" / "grill-harness" / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("grh> init --project", router)
-        self.assertIn("not_started", router)
+        self.assertNotIn("grh> init --project", router)
+        self.assertIn("entry-check --entry <公开入口>", router)
+        self.assertIn("Router 本身不初始化", router)
 
     def test_final_green_evidence_uses_grh_for_every_route(self):
         green = (ROUTER_DIR / "GREEN.md").read_text(encoding="utf-8")

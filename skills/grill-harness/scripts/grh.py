@@ -732,7 +732,12 @@ def _status(args):
 def _entry_check(args):
     """Report entry eligibility without initializing or transitioning workflow state."""
 
-    preflight_report = preflight.run_preflight(skill_roots=())
+    installed_skills_root = Path(__file__).resolve().parents[2]
+    preflight_report = preflight.run_preflight(
+        skill_roots=(installed_skills_root,),
+        check_harness_entries=True,
+        invoking_entry=args.entry,
+    )
     _, status_report = _status(args)
     decision = entry_contract.evaluate_entry_request(
         args.entry,
@@ -740,6 +745,28 @@ def _entry_check(args):
         status_report["reconciliation"],
         requested_scope=tuple(args.requested_scope),
     )
+    installation = preflight_report["harness_installation"]
+    if not preflight_report["entry_ready"]:
+        incompatible = list(installation["incompatible_entries"])
+        decision["eligible"] = False
+        decision["reason_code"] = (
+            "harness_contract_incompatible"
+            if incompatible or (
+                installation["core_path"]
+                and not installation["contract_compatible"]
+            )
+            else "harness_installation_incomplete"
+        )
+        decision["missing_prerequisites"] = list(dict.fromkeys(
+            list(decision["missing_prerequisites"])
+            + list(installation["missing_entries"])
+            + incompatible
+        ))
+        decision["forbidden_scope"] = list(dict.fromkeys(
+            list(decision["forbidden_scope"]) + list(decision["allowed_scope"])
+        ))
+        decision["allowed_scope"] = []
+        decision["recommended_entry"] = None
     control = entry_contract.entry_control_summary(args.entry, status_report, decision)
     return (0 if decision["eligible"] else 1), {
         "ok": decision["eligible"],

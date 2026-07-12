@@ -1,0 +1,4 @@
+interface:
+  display_name: "GRH Plan"
+  short_description: "深化规格并生成垂直执行 Frontier"
+  default_prompt: "使用 $grh-plan 挑战选定路线并形成可批准规格；不要实施，生成 Frontier 后停止。"

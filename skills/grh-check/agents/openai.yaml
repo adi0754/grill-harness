@@ -1,0 +1,4 @@
+interface:
+  display_name: "GRH Check"
+  short_description: "独立审查、集成检查与最终验收"
+  default_prompt: "使用 $grh-check 独立核验证据并给出验收结论；不要实施、修复或切换路线。"
