@@ -15,6 +15,7 @@ SCRIPTS = CLI.parent
 sys.path.insert(0, str(SCRIPTS))
 
 import grh
+import failure_control
 import state
 import workflow_ops
 
@@ -354,6 +355,42 @@ class WorkflowOperationTests(unittest.TestCase):
                 "output_path": str(report),
             }
             record.write_text(json.dumps(full), encoding="utf-8")
+            missing_review = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "task",
+                "--record", str(record), env=env,
+            )
+            forged_review = dict(full)
+            forged_review.update(
+                {
+                    "review_required": True,
+                    "review": {
+                        "status": "recorded",
+                        "baseline": full["git_baseline"],
+                        "goals_satisfied": True,
+                        "test_evidence_satisfied": True,
+                        "unresolved_route_issue": False,
+                        "comments": [],
+                    },
+                }
+            )
+            record.write_text(json.dumps(forged_review), encoding="utf-8")
+            forged_recorded_review = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "task",
+                "--record", str(record), env=env,
+            )
+            full.update(
+                {
+                    "review_required": True,
+                    "review": {
+                        "status": "pending",
+                        "goals_satisfied": False,
+                        "test_evidence_satisfied": False,
+                        "unresolved_route_issue": False,
+                        "comments": [],
+                    },
+                }
+            )
+            record.write_text(json.dumps(full), encoding="utf-8")
             registered = run_cli(
                 "record", "--workflow", str(workflow), "--kind", "task",
                 "--record", str(record), env=env,
@@ -407,7 +444,13 @@ class WorkflowOperationTests(unittest.TestCase):
                 "--project", str(Path(directory) / "project"), env=env,
             )
             linked_record = dict(json.loads(evidence_record.read_text(encoding="utf-8")))
-            linked_record.update({"id": "EVD-001", "tasks": ["TASK-001"]})
+            linked_record.update(
+                {
+                    "id": "EVD-001",
+                    "tasks": ["TASK-001"],
+                    "issues": ["ISSUE-MUST"],
+                }
+            )
             evidence_record.write_text(json.dumps(linked_record), encoding="utf-8")
             linked_registered = run_cli(
                 "record", "--workflow", str(workflow), "--kind", "evidence",
@@ -423,7 +466,91 @@ class WorkflowOperationTests(unittest.TestCase):
                 "--evidence", "EVD-001",
                 "--project", str(Path(directory) / "project"), env=env,
             )
+            (Path(directory) / "project" / "README.md").write_text(
+                "fixture\n", encoding="utf-8"
+            )
+            state_path = workflow / "系统" / "state.yaml"
+            tasks_path = workflow / "系统" / "tasks.yaml"
+            legacy_state = json.loads(state_path.read_text(encoding="utf-8"))
+            legacy_task = next(
+                item for item in legacy_state["tasks"] if item["id"] == "TASK-001"
+            )
+            legacy_task.pop("review_required", None)
+            legacy_task.pop("review", None)
+            state_path.write_text(json.dumps(legacy_state), encoding="utf-8")
+            tasks_payload = json.loads(tasks_path.read_text(encoding="utf-8"))
+            tasks_payload["tasks"] = legacy_state["tasks"]
+            tasks_path.write_text(json.dumps(tasks_payload), encoding="utf-8")
+            legacy_completion = run_cli(
+                "task-transition", "--workflow", str(workflow),
+                "--task", "TASK-001", "--to", "completed",
+                "--evidence", "EVD-001",
+                "--project", str(Path(directory) / "project"), env=env,
+            )
+            review_path = workflow / "系统" / "task-review.yaml"
+            review_path.write_text(
+                json.dumps(
+                    {
+                        "status": "recorded",
+                        "goals_satisfied": True,
+                        "test_evidence_satisfied": True,
+                        "unresolved_route_issue": False,
+                        "comments": [
+                            {
+                                "id": "ISSUE-WRONG",
+                                "classification": "must_fix",
+                                "status": "fixed",
+                                "evidence": ["EVD-001"],
+                            },
+                            {
+                                "id": "ISSUE-OPTIONAL",
+                                "classification": "optional_optimization",
+                                "status": "open",
+                                "evidence": [],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review_recorded = run_cli(
+                "task-review", "--workflow", str(workflow),
+                "--task", "TASK-001", "--review", str(review_path),
+                "--project", str(Path(directory) / "project"), env=env,
+            )
+            bad_review_completion = run_cli(
+                "task-transition", "--workflow", str(workflow),
+                "--task", "TASK-001", "--to", "completed",
+                "--evidence", "EVD-001",
+                "--project", str(Path(directory) / "project"), env=env,
+            )
+            corrected_review = json.loads(review_path.read_text(encoding="utf-8"))
+            corrected_review["comments"][0]["id"] = "ISSUE-MUST"
+            review_path.write_text(json.dumps(corrected_review), encoding="utf-8")
+            review_corrected = run_cli(
+                "task-review", "--workflow", str(workflow),
+                "--task", "TASK-001", "--review", str(review_path),
+                "--project", str(Path(directory) / "project"), env=env,
+            )
+            completed = run_cli(
+                "task-transition", "--workflow", str(workflow),
+                "--task", "TASK-001", "--to", "completed",
+                "--evidence", "EVD-001",
+                "--project", str(Path(directory) / "project"), env=env,
+            )
 
+            self.assertEqual(missing_review.returncode, 2, missing_review.stdout)
+            self.assertIn(
+                "review_required",
+                json.loads(missing_review.stdout)["error"]["message"],
+            )
+            self.assertEqual(
+                forged_recorded_review.returncode, 2, forged_recorded_review.stdout
+            )
+            self.assertIn(
+                "pending",
+                json.loads(forged_recorded_review.stdout)["error"]["message"],
+            )
             self.assertEqual(registered.returncode, 0, registered.stdout)
             self.assertEqual(started.returncode, 0, started.stdout)
             self.assertEqual(no_evidence.returncode, 2)
@@ -442,6 +569,30 @@ class WorkflowOperationTests(unittest.TestCase):
             self.assertIn(
                 "Git 基线",
                 json.loads(stale_completion.stdout)["error"]["message"],
+            )
+            self.assertEqual(review_recorded.returncode, 0, review_recorded.stdout)
+            self.assertEqual(legacy_completion.returncode, 2, legacy_completion.stdout)
+            self.assertIn(
+                "review_required",
+                json.loads(legacy_completion.stdout)["error"]["message"],
+            )
+            self.assertEqual(bad_review_completion.returncode, 2, bad_review_completion.stdout)
+            self.assertIn(
+                "ISSUE-WRONG",
+                json.loads(bad_review_completion.stdout)["error"]["message"],
+            )
+            self.assertEqual(review_corrected.returncode, 0, review_corrected.stdout)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+            completed_state = json.loads(
+                (workflow / "系统" / "state.yaml").read_text(encoding="utf-8")
+            )
+            completed_task = next(
+                item for item in completed_state["tasks"] if item["id"] == "TASK-001"
+            )
+            self.assertTrue(completed_task["review_convergence"]["completion_allowed"])
+            self.assertEqual(
+                completed_task["review_convergence"]["optional_review_ids"],
+                ["ISSUE-OPTIONAL"],
             )
 
     def test_dirty_git_worktree_invalidates_clean_baseline_evidence(self):
@@ -597,6 +748,14 @@ class WorkflowOperationTests(unittest.TestCase):
                         "id": "TASK-REPAIR",
                         "task_type": "repair",
                         "repair_mode": "ordinary",
+                        "review_required": True,
+                        "review": {
+                            "status": "pending",
+                            "goals_satisfied": False,
+                            "test_evidence_satisfied": False,
+                            "unresolved_route_issue": False,
+                            "comments": [],
+                        },
                         "failure_class": "implementation_failure",
                         "failure_fingerprint": payloads[-1]["fingerprint"],
                         "attempt_count": 3,
@@ -638,6 +797,66 @@ class WorkflowOperationTests(unittest.TestCase):
             self.assertEqual(repair.returncode, 2, repair.stdout)
             self.assertIn("grh-recover", json.loads(repair.stdout)["error"]["message"])
 
+            privileged_task = json.loads(task_record.read_text(encoding="utf-8"))
+            privileged_task.pop("repair_mode")
+            task_record.write_text(json.dumps(privileged_task), encoding="utf-8")
+            missing_mode = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "task",
+                "--record", str(task_record), env=env,
+            )
+            privileged_task["repair_mode"] = "unknown_escape"
+            task_record.write_text(json.dumps(privileged_task), encoding="utf-8")
+            unknown_mode = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "task",
+                "--record", str(task_record), env=env,
+            )
+            privileged_task["repair_mode"] = "recovery"
+            task_record.write_text(json.dumps(privileged_task), encoding="utf-8")
+            missing_approval = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "task",
+                "--record", str(task_record), env=env,
+            )
+
+            self.assertEqual(missing_mode.returncode, 2, missing_mode.stdout)
+            self.assertIn("repair_mode", json.loads(missing_mode.stdout)["error"]["message"])
+            self.assertEqual(unknown_mode.returncode, 2, unknown_mode.stdout)
+            self.assertIn("repair_mode", json.loads(unknown_mode.stdout)["error"]["message"])
+            self.assertEqual(missing_approval.returncode, 2, missing_approval.stdout)
+            self.assertIn("approval", json.loads(missing_approval.stdout)["error"]["message"])
+
+            recovery_approval = workflow / "系统" / "recovery-approval.yaml"
+            recovery_approval.write_text(
+                json.dumps(
+                    {
+                        "id": "DEC-777",
+                        "type": "DEC",
+                        "version": 1,
+                        "status": "approved",
+                        "approved_by": "user",
+                        "gate": "failure_recovery",
+                        "repair_mode": "recovery",
+                        "failure_fingerprint": payloads[-1]["fingerprint"],
+                        "issue_id": "ISSUE-007",
+                        "reason": "用户批准第三轮后进入恢复任务",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approval_registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "ledger",
+                "--record", str(recovery_approval), env=env,
+            )
+            privileged_task["repair_approval_id"] = "DEC-777"
+            task_record.write_text(json.dumps(privileged_task), encoding="utf-8")
+            authorized_recovery = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "task",
+                "--record", str(task_record), env=env,
+            )
+
+            self.assertEqual(approval_registered.returncode, 0, approval_registered.stdout)
+            self.assertEqual(authorized_recovery.returncode, 0, authorized_recovery.stdout)
+
+            persisted = json.loads(state_path.read_text(encoding="utf-8"))
             persisted["failure_attempts"][-1].update(
                 {
                     "attempt_count": 1,
@@ -671,6 +890,15 @@ class WorkflowOperationTests(unittest.TestCase):
             base = Path(directory)
             env, workflow = self._workflow(base)
             state_path = workflow / "系统" / "state.yaml"
+            origin = json.loads(state_path.read_text(encoding="utf-8"))["git_baseline"]
+            fingerprint = failure_control.issue_fingerprint(
+                {
+                    "issue_id": "ISSUE-401",
+                    "failed_command": ["python3 -m unittest"],
+                    "failed_acceptance": [],
+                    "originating_baseline": origin,
+                }
+            )
             approval = workflow / "系统" / "failure-threshold-decision.yaml"
             approval.write_text(
                 json.dumps(
@@ -681,6 +909,10 @@ class WorkflowOperationTests(unittest.TestCase):
                         "summary": "用户批准把同问题阈值提高到四轮",
                         "status": "approved",
                         "approved_by": "user",
+                        "failure_fingerprint": fingerprint,
+                        "issue_id": "ISSUE-401",
+                        "approved_threshold": 4,
+                        "reason": "用户要求用第四轮验证新根因",
                     }
                 ),
                 encoding="utf-8",
@@ -738,6 +970,49 @@ class WorkflowOperationTests(unittest.TestCase):
                     "root_cause_recheck",
                     "recover_required",
                 ],
+            )
+
+    def test_failure_record_reuses_existing_chain_after_current_baseline_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env, workflow = self._workflow(base)
+            project = base / "project"
+            common_arguments = (
+                "failure-record",
+                "--workflow",
+                str(workflow),
+                "--project",
+                str(project),
+                "--failure-class",
+                "implementation_failure",
+                "--issue-id",
+                "ISSUE-501",
+                "--failed-acceptance",
+                "REQ-501",
+            )
+
+            first = run_cli(*common_arguments, env=env)
+            first_payload = json.loads(first.stdout)["failure"]
+            (project / "README.md").write_text("repair changed baseline\n", encoding="utf-8")
+            second = run_cli(
+                *common_arguments,
+                "--existing-fingerprint",
+                first_payload["fingerprint"],
+                env=env,
+            )
+
+            self.assertEqual(first.returncode, 0, first.stdout)
+            self.assertEqual(second.returncode, 0, second.stdout)
+            second_payload = json.loads(second.stdout)["failure"]
+            self.assertEqual(second_payload["fingerprint"], first_payload["fingerprint"])
+            self.assertEqual(second_payload["attempt_count"], 2)
+            self.assertEqual(
+                second_payload["record"]["originating_baseline"],
+                first_payload["record"]["originating_baseline"],
+            )
+            self.assertNotEqual(
+                second_payload["record"]["current_baseline"],
+                first_payload["record"]["current_baseline"],
             )
 
     def test_concurrent_failure_records_keep_every_unique_attempt_number(self):

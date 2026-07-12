@@ -921,6 +921,7 @@ def _failure_record(args):
         workflow_path,
         {
             "failure_class": args.failure_class,
+            "fingerprint": args.existing_fingerprint,
             "issue_id": args.issue_id,
             "failed_acceptance": args.failed_acceptance,
             "failed_command": args.failed_command,
@@ -930,6 +931,27 @@ def _failure_record(args):
         threshold_override=override,
     )
     return 0, {"ok": True, "command": "failure-record", "failure": report}
+
+
+def _task_review(args):
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
+    workflow_path = _workflow_file(args.workflow)
+    workflow_state = common.read_yaml(workflow_path)
+    if (
+        not isinstance(workflow_state, Mapping)
+        or workflow_state.get("project_id") != identity.project_id
+    ):
+        raise ValueError("project does not own the selected workflow")
+    review = _read_mapping(Path(args.review).expanduser().resolve(), "task review")
+    report = workflow_ops.record_task_review(
+        workflow_path,
+        args.task,
+        review,
+        current_baseline=_current_baseline(args.project, identity),
+    )
+    return 0, {"ok": True, "command": "task-review", "task_review": report}
 
 
 def _authorize_knowledge_mutation(args, operation):
@@ -1109,6 +1131,7 @@ def _parser():
         "--failure-class", choices=sorted(failure_control.FAILURE_CLASSES), required=True
     )
     failure_record.add_argument("--issue-id", required=True)
+    failure_record.add_argument("--existing-fingerprint")
     failure_record.add_argument("--failed-acceptance", action="append", default=[])
     failure_record.add_argument("--failed-command", action="append", default=[])
     failure_record.add_argument("--evidence", action="append", default=[])
@@ -1116,6 +1139,13 @@ def _parser():
     failure_record.add_argument("--approval-id")
     failure_record.add_argument("--override-reason")
     failure_record.set_defaults(handler=_failure_record)
+
+    task_review = commands.add_parser("task-review")
+    task_review.add_argument("--workflow", required=True)
+    task_review.add_argument("--task", required=True)
+    task_review.add_argument("--review", required=True)
+    task_review.add_argument("--project", required=True)
+    task_review.set_defaults(handler=_task_review)
 
     knowledge_query = commands.add_parser("knowledge-query")
     knowledge_query.add_argument("--project", required=True)

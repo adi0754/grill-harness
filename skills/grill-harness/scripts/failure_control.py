@@ -14,6 +14,7 @@ FAILURE_CLASSES = frozenset(
     )
 )
 DEFAULT_ATTEMPT_THRESHOLD = 3
+REPAIR_MODES = frozenset(("ordinary", "recovery", "route_selection", "reconcile"))
 
 
 def _non_empty_string(value):
@@ -57,7 +58,9 @@ def issue_fingerprint(
             "failed_command",
             facts.get("failed_commands", failed_command),
         )
-        git_baseline = facts.get("git_baseline", git_baseline)
+        git_baseline = facts.get(
+            "originating_baseline", facts.get("git_baseline", git_baseline)
+        )
     else:
         issue_id = issue_or_facts
     if not _non_empty_string(issue_id):
@@ -85,7 +88,13 @@ def issue_fingerprint(
     return "FAIL-{}".format(digest[:16])
 
 
-def validate_threshold_override(override, ledger=()):
+def validate_threshold_override(
+    override,
+    ledger=(),
+    *,
+    fingerprint=None,
+    issue_id=None,
+):
     """Validate an explicit user-approved DEC/CHG threshold change."""
 
     conflicts = []
@@ -122,8 +131,10 @@ def validate_threshold_override(override, ledger=()):
             }
         )
     approval_id = override.get("approval_id", override.get("id"))
-    approval = override.get("approval")
-    if approval is None and isinstance(ledger, Sequence) and not isinstance(
+    fingerprint = fingerprint or override.get("failure_fingerprint")
+    issue_id = issue_id or override.get("issue_id")
+    approval = None
+    if isinstance(ledger, Sequence) and not isinstance(
         ledger, (str, bytes, bytearray, Mapping)
     ):
         approval = next(
@@ -134,10 +145,6 @@ def validate_threshold_override(override, ledger=()):
             ),
             None,
         )
-    if approval is None and all(
-        field in override for field in ("id", "type", "status", "approved_by")
-    ):
-        approval = override
     approval_type = approval.get("type") if isinstance(approval, Mapping) else None
     valid_prefix = (
         isinstance(approval_id, str)
@@ -159,6 +166,25 @@ def validate_threshold_override(override, ledger=()):
             {
                 "field": "approval_id",
                 "conflict": "threshold override requires a persisted user-approved DEC/CHG",
+            }
+        )
+    elif not (
+        _non_empty_string(fingerprint)
+        and _non_empty_string(issue_id)
+        and approval.get("failure_fingerprint") == fingerprint
+        and approval.get("issue_id") == issue_id
+        and approval.get("approved_threshold") == threshold
+        and approval.get("reason") == (
+            reason.strip() if _non_empty_string(reason) else None
+        )
+    ):
+        conflicts.append(
+            {
+                "field": "approval_binding",
+                "conflict": (
+                    "threshold approval must exactly bind the failure fingerprint, "
+                    "issue, approved threshold, and reason"
+                ),
             }
         )
     return {
@@ -191,19 +217,39 @@ def record_attempt(history, failure=None, *, threshold_override=None, ledger=(),
     failure_class = failure.get("failure_class")
     if failure_class not in FAILURE_CLASSES:
         raise ValueError("unknown failure class: {}".format(failure_class))
+    originating_baseline = failure.get(
+        "originating_baseline", failure.get("git_baseline")
+    )
+    current_baseline = failure.get(
+        "current_baseline", failure.get("observed_baseline", originating_baseline)
+    )
+    failure["originating_baseline"] = originating_baseline
+    failure["current_baseline"] = current_baseline
     fingerprint = issue_fingerprint(failure)
     supplied_fingerprint = failure.get("fingerprint")
     if supplied_fingerprint is not None and supplied_fingerprint != fingerprint:
         raise ValueError(
             "failure fingerprint must match the structured issue/check/baseline facts"
         )
-    attempt_count = 1 + sum(
-        1 for item in existing if item.get("fingerprint") == fingerprint
-    )
+    matching = [item for item in existing if item.get("fingerprint") == fingerprint]
+    if any(item.get("failure_class") != failure_class for item in matching):
+        raise ValueError("failure class cannot change inside one fingerprint chain")
+    if any(issue_fingerprint(item) != fingerprint for item in matching):
+        raise ValueError("failure history fingerprint contradicts structured chain facts")
+    if [item.get("attempt_count") for item in matching] != list(
+        range(1, len(matching) + 1)
+    ):
+        raise ValueError("failure attempt history must be contiguous in persistence order")
+    attempt_count = len(matching) + 1
     threshold = DEFAULT_ATTEMPT_THRESHOLD
     override_report = None
     if threshold_override is not None:
-        override_report = validate_threshold_override(threshold_override, ledger)
+        override_report = validate_threshold_override(
+            threshold_override,
+            ledger,
+            fingerprint=fingerprint,
+            issue_id=failure.get("issue_id", failure.get("id")),
+        )
         if not override_report["valid"]:
             raise ValueError(override_report["conflicts"][0]["conflict"])
         threshold = override_report["threshold"]
@@ -231,7 +277,9 @@ def record_attempt(history, failure=None, *, threshold_override=None, ledger=(),
         "issue_id": failure.get("issue_id", failure.get("id")),
         "failed_acceptance": acceptance,
         "failed_command": commands,
-        "git_baseline": failure.get("git_baseline"),
+        "originating_baseline": originating_baseline,
+        "current_baseline": current_baseline,
+        "git_baseline": originating_baseline,
         "attempt_count": attempt_count,
         "attempt_history": [
             {
@@ -271,7 +319,7 @@ def record_attempt(history, failure=None, *, threshold_override=None, ledger=(),
     )
 
 
-def _review_summary(
+def review_convergence(
     review_comments,
     *,
     goals_satisfied,
@@ -338,6 +386,9 @@ def next_action(
     *,
     threshold=DEFAULT_ATTEMPT_THRESHOLD,
     threshold_override=None,
+    ledger=(),
+    fingerprint=None,
+    issue_id=None,
     review_comments=(),
     goals_satisfied=True,
     test_evidence_satisfied=True,
@@ -352,7 +403,12 @@ def next_action(
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
         raise ValueError("failure threshold must be a positive integer")
     if threshold_override is not None:
-        override_report = validate_threshold_override(threshold_override)
+        override_report = validate_threshold_override(
+            threshold_override,
+            ledger,
+            fingerprint=fingerprint,
+            issue_id=issue_id,
+        )
         if not override_report["valid"]:
             raise ValueError(override_report["conflicts"][0]["conflict"])
         threshold = override_report["threshold"]
@@ -409,7 +465,7 @@ def next_action(
             }
         )
     base.update(
-        _review_summary(
+        review_convergence(
             review_comments,
             goals_satisfied=goals_satisfied,
             test_evidence_satisfied=test_evidence_satisfied,
@@ -424,8 +480,10 @@ def next_action(
 __all__ = [
     "DEFAULT_ATTEMPT_THRESHOLD",
     "FAILURE_CLASSES",
+    "REPAIR_MODES",
     "issue_fingerprint",
     "next_action",
     "record_attempt",
+    "review_convergence",
     "validate_threshold_override",
 ]

@@ -4,6 +4,14 @@
       "id": "TASK-001",
       "status": "pending",
       "currentness": "current",
+      "review_required": true,
+      "review": {
+        "status": "pending",
+        "goals_satisfied": false,
+        "test_evidence_satisfied": false,
+        "unresolved_route_issue": false,
+        "comments": []
+      },
       "depends_on": [],
       "blockers": [],
       "parallel_group": "serial-1",

@@ -145,6 +145,40 @@ def _validate_task_contract(record, workflow_root):
         raise ValueError("task package file does not exist")
     if not Path(record["startup_prompt_path"]).is_file():
         raise ValueError("task startup prompt file does not exist")
+    if record.get("review_required") is not True:
+        raise ValueError("new tasks require review_required: true")
+    review = record.get("review")
+    _validate_review_payload(review, allow_pending=True)
+    if review.get("status") != "pending" or "baseline" in review:
+        raise ValueError(
+            "new task review must be pending without a baseline; use task-review later"
+        )
+
+
+def _validate_review_payload(review, *, allow_pending):
+    if not isinstance(review, dict):
+        raise ValueError("task review must be a mapping")
+    allowed_statuses = {"recorded"}
+    if allow_pending:
+        allowed_statuses.add("pending")
+    if review.get("status") not in allowed_statuses:
+        raise ValueError("task review status is invalid")
+    for field in (
+        "goals_satisfied",
+        "test_evidence_satisfied",
+        "unresolved_route_issue",
+    ):
+        if not isinstance(review.get(field), bool):
+            raise ValueError("task review {} must be boolean".format(field))
+    comments = review.get("comments")
+    if not isinstance(comments, list):
+        raise ValueError("task review comments must be a list")
+    failure_control.review_convergence(
+        comments,
+        goals_satisfied=review["goals_satisfied"],
+        test_evidence_satisfied=review["test_evidence_satisfied"],
+        unresolved_route_issue=review["unresolved_route_issue"],
+    )
 
 
 def _validate_repair_task_policy(record, workflow):
@@ -187,7 +221,7 @@ def _validate_repair_task_policy(record, workflow):
             "recorded failure attempts must be contiguous in persistence order"
         )
     latest = matching[-1]
-    if latest.get("failure_class") != failure_class:
+    if any(item.get("failure_class") != failure_class for item in matching):
         raise ValueError("repair task failure class contradicts recorded attempts")
     declared_attempt = record.get("attempt_count")
     if (
@@ -207,7 +241,10 @@ def _validate_repair_task_policy(record, workflow):
         if not isinstance(override, dict):
             raise ValueError("recorded failure threshold lacks a user-approved override")
         override_report = failure_control.validate_threshold_override(
-            dict(override, threshold=threshold), workflow.get("ledger", ())
+            dict(override, threshold=threshold),
+            workflow.get("ledger", ()),
+            fingerprint=fingerprint,
+            issue_id=latest.get("issue_id"),
         )
         if not override_report["valid"]:
             raise ValueError(override_report["conflicts"][0]["conflict"])
@@ -218,7 +255,10 @@ def _validate_repair_task_policy(record, workflow):
         attempt_count=declared_attempt,
         threshold=threshold,
     )
-    ordinary = record.get("repair_mode", "ordinary") == "ordinary"
+    repair_mode = record.get("repair_mode")
+    if repair_mode not in failure_control.REPAIR_MODES:
+        raise ValueError("repair_mode must be one of the declared repair modes")
+    ordinary = repair_mode == "ordinary"
     if ordinary and not policy["ordinary_repair_allowed"]:
         action = policy["action"]
         if action == "recover_required":
@@ -232,6 +272,54 @@ def _validate_repair_task_policy(record, workflow):
         if action == "more_evidence_required":
             raise ValueError("evidence failure requires more evidence before repair")
         raise ValueError("workflow integrity failure requires reconcile before repair")
+    if ordinary:
+        return
+    required_action = {
+        "recovery": "recover_required",
+        "route_selection": "human_route_selection",
+        "reconcile": "reconcile_required",
+    }[repair_mode]
+    if policy["action"] != required_action:
+        raise ValueError(
+            "repair_mode {} does not match the current failure action {}".format(
+                repair_mode, policy["action"]
+            )
+        )
+    approval_id = record.get(
+        "repair_approval_id",
+        record.get(
+            "{}_approval_id".format(repair_mode),
+            record.get("route_approval_id") if repair_mode == "route_selection" else None,
+        ),
+    )
+    approval = next(
+        (
+            item
+            for item in reversed(list(workflow.get("ledger", ())))
+            if isinstance(item, dict) and item.get("id") == approval_id
+        ),
+        None,
+    )
+    required_gate = {
+        "recovery": "failure_recovery",
+        "route_selection": "route_selection",
+        "reconcile": "workflow_reconcile",
+    }[repair_mode]
+    if not (
+        isinstance(approval, dict)
+        and approval.get("type") in {"DEC", "CHG"}
+        and approval.get("status") == "approved"
+        and approval.get("approved_by") == "user"
+        and approval.get("gate") == required_gate
+        and approval.get("repair_mode") == repair_mode
+        and approval.get("failure_fingerprint") == fingerprint
+        and approval.get("issue_id") == latest.get("issue_id")
+        and isinstance(approval.get("reason"), str)
+        and approval["reason"].strip()
+    ):
+        raise ValueError(
+            "non-ordinary repair requires a durable user approval bound to its mode and failure"
+        )
 
 
 def _write(state_path, workflow, manifests, extra_payloads=None):
@@ -799,6 +887,13 @@ def transition_task(
                         raise ValueError(
                             "task evidence output must be inside the current workflow"
                         )
+                candidate["review_convergence"] = _validate_task_review_completion(
+                    candidate,
+                    workflow,
+                    evidence_index,
+                    current_baseline=current_baseline,
+                    workflow_root=workflow_root,
+                )
                 if not Path(candidate["output_path"]).is_file():
                     raise ValueError("completed task report does not exist")
                 candidate["evidence"] = evidence_ids
@@ -815,6 +910,117 @@ def transition_task(
             raise ValueError(graph["conflicts"][0]["conflict"])
         _write(state_path, updated, manifests)
     return {"task": task_id, "status": target, "workflow_path": str(state_path)}
+
+
+def record_task_review(
+    workflow_value,
+    task_id,
+    review,
+    *,
+    current_baseline,
+):
+    """Persist review facts for a review-required task under the workflow lock."""
+
+    if not isinstance(current_baseline, str) or not current_baseline.strip():
+        raise ValueError("task review requires the current project baseline")
+    _validate_review_payload(review, allow_pending=False)
+    state_path = _state_path(workflow_value)
+    lock = state_path.parent / ".workflow.lock"
+    with common.exclusive_directory_lock(lock):
+        workflow, manifests = _load(state_path)
+        tasks = workflow.get("tasks")
+        if not isinstance(tasks, list):
+            raise ValueError("tasks must be a list")
+        updated_tasks = []
+        found = False
+        for task in tasks:
+            if not isinstance(task, dict) or task.get("id") != task_id:
+                updated_tasks.append(task)
+                continue
+            found = True
+            if task.get("review_required") is False:
+                raise ValueError("task is not declared review-required")
+            if task.get("status") not in {"in_progress", "blocked"}:
+                raise ValueError("task review can only be recorded while work is active")
+            candidate = dict(task)
+            candidate["review_required"] = True
+            candidate["review"] = dict(copy.deepcopy(review), baseline=current_baseline)
+            updated_tasks.append(candidate)
+        if not found:
+            raise ValueError("unknown task: {}".format(task_id))
+        updated = dict(workflow)
+        updated["tasks"] = updated_tasks
+        _write(state_path, updated, manifests)
+    return {"task": task_id, "review_status": "recorded", "workflow_path": str(state_path)}
+
+
+def _validate_task_review_completion(
+    task,
+    workflow,
+    evidence_index,
+    *,
+    current_baseline,
+    workflow_root,
+):
+    if task.get("review_required") is not True:
+        raise ValueError("task completion requires review_required: true")
+    review = task.get("review")
+    _validate_review_payload(review, allow_pending=False)
+    if review.get("baseline") != current_baseline:
+        raise ValueError("task review baseline is missing or no longer current")
+    summary = failure_control.review_convergence(
+        review["comments"],
+        goals_satisfied=review["goals_satisfied"],
+        test_evidence_satisfied=review["test_evidence_satisfied"],
+        unresolved_route_issue=review["unresolved_route_issue"],
+    )
+    if not summary["completion_allowed"]:
+        blockers = (
+            summary["unresolved_review_ids"]
+            + summary["missing_review_evidence_ids"]
+        )
+        raise ValueError(
+            "task review has not converged: {}".format(
+                ", ".join(blockers) or "review goals/evidence/route facts"
+            )
+        )
+    for comment in review["comments"]:
+        classification = comment.get(
+            "classification", comment.get("disposition", comment.get("severity"))
+        )
+        if classification != "must_fix":
+            continue
+        for evidence_id in comment.get("evidence", ()):
+            evidence_record = evidence_index.get(evidence_id)
+            if evidence_record is None:
+                raise ValueError(
+                    "must-fix {} references missing evidence {}".format(
+                        comment["id"], evidence_id
+                    )
+                )
+            report = validate.validate_evidence(
+                evidence_record,
+                current_baseline=current_baseline,
+                current_time=datetime.now(timezone.utc).isoformat(),
+                require_output_exists=True,
+            )
+            if not report["valid"]:
+                raise ValueError(report["conflicts"][0]["conflict"])
+            if task["id"] not in evidence_record.get("tasks", ()):
+                raise ValueError(
+                    "must-fix evidence {} does not trace task {}".format(
+                        evidence_id, task["id"]
+                    )
+                )
+            if comment["id"] not in evidence_record.get("issues", ()):
+                raise ValueError(
+                    "must-fix {} is not traced by evidence {}".format(
+                        comment["id"], evidence_id
+                    )
+                )
+            if not _within_workflow(evidence_record.get("output_path"), workflow_root):
+                raise ValueError("must-fix evidence output must be inside the current workflow")
+    return summary
 
 
 def record_failure_attempt(
@@ -837,7 +1043,31 @@ def record_failure_attempt(
         history = workflow.get("failure_attempts", [])
         if not isinstance(history, list):
             raise ValueError("failure_attempts must be a list")
-        facts = dict(failure, git_baseline=current_baseline)
+        existing_fingerprint = failure.get("fingerprint")
+        originating_baseline = failure.get("originating_baseline")
+        if existing_fingerprint is not None:
+            matching = [
+                item
+                for item in history
+                if isinstance(item, dict)
+                and item.get("fingerprint") == existing_fingerprint
+            ]
+            if not matching:
+                raise ValueError("existing failure fingerprint was not found")
+            originating_baselines = {
+                item.get("originating_baseline", item.get("git_baseline"))
+                for item in matching
+            }
+            if len(originating_baselines) != 1 or not all(originating_baselines):
+                raise ValueError("existing failure chain has no stable originating baseline")
+            originating_baseline = next(iter(originating_baselines))
+        if originating_baseline is None:
+            originating_baseline = current_baseline
+        facts = dict(
+            failure,
+            originating_baseline=originating_baseline,
+            current_baseline=current_baseline,
+        )
         report = failure_control.record_attempt(
             history,
             facts,
@@ -872,6 +1102,7 @@ __all__ = [
     "parse_artifact_versions",
     "commit_knowledge_update",
     "record_failure_attempt",
+    "record_task_review",
     "register_record",
     "transition_task",
     "transition_phase",

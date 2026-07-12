@@ -103,18 +103,37 @@ class FailureControlTests(unittest.TestCase):
         self.assertIsNone(action["selected_route"])
 
     def test_threshold_override_requires_user_approved_decision_and_reason(self):
+        fingerprint = "FAIL-1111111111111111"
         ledger = [
             {
                 "id": "DEC-101",
                 "type": "DEC",
                 "status": "approved",
                 "approved_by": "user",
+                "failure_fingerprint": fingerprint,
+                "issue_id": "ISSUE-101",
+                "approved_threshold": 4,
+                "reason": "第四轮用于验证已由用户确认的新根因",
             },
             {
                 "id": "CHG-102",
                 "type": "CHG",
                 "status": "approved",
                 "approved_by": "agent",
+                "failure_fingerprint": fingerprint,
+                "issue_id": "ISSUE-101",
+                "approved_threshold": 4,
+                "reason": "agent proposed",
+            },
+            {
+                "id": "DEC-999",
+                "type": "DEC",
+                "status": "approved",
+                "approved_by": "user",
+                "failure_fingerprint": "FAIL-9999999999999999",
+                "issue_id": "ISSUE-999",
+                "approved_threshold": 999,
+                "reason": "unrelated approval",
             },
         ]
 
@@ -125,9 +144,14 @@ class FailureControlTests(unittest.TestCase):
                 "reason": "第四轮用于验证已由用户确认的新根因",
             },
             ledger,
+            fingerprint=fingerprint,
+            issue_id="ISSUE-101",
         )
         missing_reason = failure_control.validate_threshold_override(
-            {"threshold": 4, "approval_id": "DEC-101", "reason": ""}, ledger
+            {"threshold": 4, "approval_id": "DEC-101", "reason": ""},
+            ledger,
+            fingerprint=fingerprint,
+            issue_id="ISSUE-101",
         )
         agent_only = failure_control.validate_threshold_override(
             {
@@ -136,12 +160,25 @@ class FailureControlTests(unittest.TestCase):
                 "reason": "agent proposed",
             },
             ledger,
+            fingerprint=fingerprint,
+            issue_id="ISSUE-101",
+        )
+        unrelated = failure_control.validate_threshold_override(
+            {
+                "threshold": 4,
+                "approval_id": "DEC-999",
+                "reason": "第四轮用于验证已由用户确认的新根因",
+            },
+            ledger,
+            fingerprint=fingerprint,
+            issue_id="ISSUE-101",
         )
 
         self.assertTrue(valid["valid"])
         self.assertEqual(valid["threshold"], 4)
         self.assertFalse(missing_reason["valid"])
         self.assertFalse(agent_only["valid"])
+        self.assertFalse(unrelated["valid"])
 
     def test_record_attempt_counts_only_the_same_stable_fingerprint(self):
         facts = {
@@ -166,6 +203,47 @@ class FailureControlTests(unittest.TestCase):
         self.assertEqual(different_baseline["attempt_count"], 1)
         self.assertEqual(second["record"]["action"], "root_cause_recheck")
         self.assertEqual(len(second["history"]), 2)
+
+    def test_repair_chain_keeps_originating_baseline_when_current_baseline_changes(self):
+        facts = {
+            "failure_class": "implementation_failure",
+            "issue_id": "ISSUE-008",
+            "failed_acceptance": ["REQ-008"],
+            "failed_command": [],
+            "originating_baseline": "base-before-repair",
+            "current_baseline": "base-before-repair",
+        }
+
+        first = failure_control.record_attempt([], facts)
+        second = failure_control.record_attempt(
+            first["history"],
+            dict(facts, current_baseline="base-after-first-repair"),
+        )
+
+        self.assertEqual(second["fingerprint"], first["fingerprint"])
+        self.assertEqual(second["attempt_count"], 2)
+        self.assertEqual(
+            second["record"]["originating_baseline"], "base-before-repair"
+        )
+        self.assertEqual(
+            second["record"]["current_baseline"], "base-after-first-repair"
+        )
+
+    def test_failure_class_cannot_change_inside_one_fingerprint_chain(self):
+        facts = {
+            "failure_class": "implementation_failure",
+            "issue_id": "ISSUE-009",
+            "failed_acceptance": ["REQ-009"],
+            "failed_command": [],
+            "originating_baseline": "base-009",
+            "current_baseline": "base-009",
+        }
+        first = failure_control.record_attempt([], facts)
+
+        with self.assertRaisesRegex(ValueError, "class"):
+            failure_control.record_attempt(
+                first["history"], dict(facts, failure_class="route_failure")
+            )
 
     def test_record_attempt_rejects_a_fingerprint_not_derived_from_failure_facts(self):
         with self.assertRaisesRegex(ValueError, "fingerprint"):
