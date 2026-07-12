@@ -11,7 +11,7 @@ import state
 
 class LedgerContractTests(unittest.TestCase):
     def test_supported_record_types_have_stable_padded_ids(self):
-        prefixes = ("REQ", "DEC", "CON", "RISK", "CHG", "TASK", "ISSUE", "EVD")
+        prefixes = ("REQ", "DEC", "CON", "RISK", "RAD", "CHG", "TASK", "ISSUE", "EVD")
         self.assertEqual(state.LEDGER_RECORD_TYPES, prefixes)
         for prefix in prefixes:
             with self.subTest(prefix=prefix):
@@ -67,6 +67,12 @@ class LedgerContractTests(unittest.TestCase):
                 {"id": "DEC-001", "type": "DEC", "version": 3},
             ]
         )
+
+    def test_top_level_ledger_validator_enforces_radar_subtype_contract(self):
+        with self.assertRaisesRegex(state.LedgerContractError, "radar"):
+            state.validate_ledger(
+                [{"id": "RAD-001", "type": "RAD", "version": 1, "summary": ""}]
+            )
 
     def test_ledger_history_must_increase_in_input_occurrence_order(self):
         with self.assertRaisesRegex(state.LedgerContractError, "occurrence order"):

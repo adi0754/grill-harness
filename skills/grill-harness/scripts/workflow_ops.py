@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import common
+import requirements_radar
 import state
 import task_graph
 import validate
@@ -284,6 +285,16 @@ def approve_gate(workflow_value, gate, approval_id, artifact_versions):
     lock = state_path.parent / ".workflow.lock"
     with common.exclusive_directory_lock(lock):
         workflow, manifests = _load(state_path)
+        if gate == "requirements_baseline":
+            blockers = requirements_radar.unresolved_baseline_blockers(
+                workflow.get("ledger", ())
+            )
+            if blockers:
+                raise ValueError(
+                    "requirements baseline is blocked by open radar records: {}".format(
+                        ", ".join(blockers)
+                    )
+                )
         updated = dict(workflow)
         gates = dict(workflow.get("gates", {}))
         gates[gate] = {

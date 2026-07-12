@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 from urllib.parse import unquote, urlsplit
 
+import requirements_radar
+
 
 SHORT_ID_LENGTH = 12
 
@@ -107,11 +109,15 @@ LEDGER_RECORD_TYPES = (
     "DEC",
     "CON",
     "RISK",
+    "RAD",
     "CHG",
     "TASK",
     "ISSUE",
     "EVD",
 )
+LEDGER_SUBTYPE_VALIDATORS = {
+    "RAD": requirements_radar.validate_radar_record,
+}
 
 
 class StateContractError(ValueError):
@@ -294,6 +300,15 @@ def _validate_record(record: Mapping[str, Any]) -> None:
             "ledger id does not match its type: {!r}".format(record_id)
         )
     _positive_integer(record.get("version"), "version")
+    subtype_validator = LEDGER_SUBTYPE_VALIDATORS.get(record_type)
+    if subtype_validator is not None:
+        report = subtype_validator(record)
+        if not report["valid"]:
+            raise LedgerContractError(
+                "invalid {} ledger record: {}".format(
+                    record_type.lower(), report["conflicts"][0]["conflict"]
+                )
+            )
 
 
 def create_ledger_record(

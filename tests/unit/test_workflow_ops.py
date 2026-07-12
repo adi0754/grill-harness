@@ -123,6 +123,87 @@ class WorkflowOperationTests(unittest.TestCase):
             )
             self.assertEqual(tasking["status"], "in_progress")
 
+    def test_requirements_gate_rejects_open_baseline_radar_before_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow = self._workflow(Path(directory))
+            state_path = workflow / "系统" / "state.yaml"
+            before = state_path.read_text(encoding="utf-8")
+            baseline_path = workflow / "核心文档" / "需求基线.md"
+            baseline_path.write_text("baseline", encoding="utf-8")
+            artifact_record = workflow / "系统" / "baseline-artifact.yaml"
+            artifact_record.write_text(
+                json.dumps({
+                    "id": "ART-BASELINE",
+                    "status": "completed",
+                    "version": 1,
+                    "kind": "requirements-baseline",
+                    "currentness": "current",
+                    "path": str(baseline_path),
+                    "decisions": ["DEC-002"],
+                }),
+                encoding="utf-8",
+            )
+            artifact_registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "artifact",
+                "--record", str(artifact_record), env=env,
+            )
+            approval_record = workflow / "系统" / "baseline-approval.yaml"
+            approval_record.write_text(
+                json.dumps({
+                    "id": "DEC-002",
+                    "type": "DEC",
+                    "version": 1,
+                    "summary": "用户批准需求基线",
+                    "status": "approved",
+                    "approved_by": "user",
+                    "gate": "requirements_baseline",
+                    "artifact_versions": {"ART-BASELINE": 1},
+                }),
+                encoding="utf-8",
+            )
+            approval_registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "ledger",
+                "--record", str(approval_record), env=env,
+            )
+            ledger_record = workflow / "系统" / "radar-record.yaml"
+            ledger_record.write_text(
+                json.dumps({
+                    "id": "RAD-001",
+                    "type": "RAD",
+                    "version": 1,
+                    "category": "paradox",
+                    "summary": "期限与回滚要求冲突",
+                    "evidence": ["requirements.md"],
+                    "confidence": "high",
+                    "impact": "路线可能全部失效",
+                    "owner": "user",
+                    "blocking_level": "baseline",
+                    "status": "open",
+                    "requirements": ["REQ-001"],
+                    "decisions": [],
+                }),
+                encoding="utf-8",
+            )
+            registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "ledger",
+                "--record", str(ledger_record), env=env,
+            )
+            before_approval = state_path.read_text(encoding="utf-8")
+
+            result = run_cli(
+                "approve", "--workflow", str(workflow),
+                "--gate", "requirements_baseline", "--approval-id", "DEC-002",
+                "--artifact-version", "ART-BASELINE=1", env=env,
+            )
+
+            self.assertEqual(artifact_registered.returncode, 0, artifact_registered.stdout)
+            self.assertEqual(approval_registered.returncode, 0, approval_registered.stdout)
+            self.assertEqual(registered.returncode, 0, registered.stdout)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("RAD-001", json.loads(result.stdout)["error"]["message"])
+            self.assertNotEqual(before, before_approval)
+            self.assertEqual(state_path.read_text(encoding="utf-8"), before_approval)
+
     def test_mutations_refuse_paths_outside_harness_storage(self):
         with tempfile.TemporaryDirectory() as directory:
             env, workflow = self._workflow(Path(directory))

@@ -1,0 +1,19 @@
+{
+  "records": [
+    {
+      "id": "RAD-001",
+      "type": "RAD",
+      "version": 1,
+      "category": "clarification",
+      "summary": "",
+      "evidence": ["<真实路径:符号或可复现查询>"],
+      "confidence": "medium",
+      "impact": "",
+      "owner": "main-agent",
+      "blocking_level": "baseline",
+      "status": "open",
+      "requirements": ["REQ-001"],
+      "decisions": []
+    }
+  ]
+}
