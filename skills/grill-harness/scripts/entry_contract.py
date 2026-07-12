@@ -59,6 +59,54 @@ def _gate_is_approved(gate):
     )
 
 
+def _phase_recommendation(phase):
+    if phase in {"preflight", "alignment", "requirements_baseline", "route_selection"}:
+        return "grh-start"
+    if phase in {"design", "repository_challenge", "specification", "final_spec_approval"}:
+        return "grh-plan"
+    if phase in {"tasking", "implementation"}:
+        return "grh-run"
+    if phase == "independent_assurance":
+        return "grh-check"
+    if phase == "knowledge_archive":
+        return "grh-learn"
+    return "grill-harness"
+
+
+def _learn_archive_prerequisites(workflow):
+    phases = workflow.get("phases", [])
+    evidence = workflow.get("evidence", [])
+    confirmation = workflow.get("archive_confirmation")
+    if not isinstance(phases, list) or not isinstance(evidence, list):
+        raise ValueError("workflow phases and evidence must be lists")
+    assurance_complete = any(
+        isinstance(item, dict)
+        and item.get("id") == "independent_assurance"
+        and item.get("status") == "completed"
+        for item in phases
+    )
+    acceptance_passed = any(
+        isinstance(item, dict)
+        and item.get("kind") == "final_acceptance"
+        and item.get("status") == "completed"
+        and item.get("result") == "accepted"
+        and item.get("current") is True
+        for item in evidence
+    )
+    archive_confirmed = confirmation is True or (
+        isinstance(confirmation, dict)
+        and confirmation.get("status") in {"approved", "confirmed"}
+    )
+    missing = []
+    if not assurance_complete:
+        missing.append("independent_assurance_completed")
+    if not acceptance_passed:
+        missing.append("current_acceptance_passed")
+    if not archive_confirmed:
+        missing.append("archive_confirmed")
+    return missing
+
+
 def evaluate_entry_request(entry_name, workflow, reconciliation, requested_scope=()):
     """Evaluate an entry request without reading or changing external state."""
 
@@ -94,6 +142,12 @@ def evaluate_entry_request(entry_name, workflow, reconciliation, requested_scope
         gate for gate in contract["required_gates"]
         if not _gate_is_approved(gates.get(gate))
     ]
+    archive_missing = _learn_archive_prerequisites(workflow) if entry_name == "grh-learn" else []
+    if archive_missing:
+        allowed_scope = [item for item in allowed_scope if item != "archive_knowledge"]
+        if "archive_knowledge" not in forbidden_scope:
+            forbidden_scope.append("archive_knowledge")
+        missing.extend(archive_missing)
     eligible = True
     reason_code = "eligible"
     recommended_entry = None
@@ -109,9 +163,27 @@ def evaluate_entry_request(entry_name, workflow, reconciliation, requested_scope
         reason_code = "workflow_not_started"
         recommended_entry = "grh-start"
     elif missing:
-        eligible = False
-        reason_code = "missing_prerequisites"
-        recommended_entry = "grh-plan" if "final_spec_approval" in missing else "grh-start"
+        if entry_name == "grh-learn" and allowed_scope:
+            reason_code = "eligible_with_restricted_scope"
+        else:
+            eligible = False
+            reason_code = "missing_prerequisites"
+            recommended_entry = (
+                "grh-check" if entry_name == "grh-learn"
+                else ("grh-plan" if "final_spec_approval" in missing else "grh-start")
+            )
+    else:
+        current_phase = workflow.get("current_phase")
+        next_phase = workflow.get("next_eligible_phase")
+        known_phases = [phase for phase in (current_phase, next_phase) if phase]
+        if (
+            contract["allowed_phases"]
+            and known_phases
+            and not any(phase in contract["allowed_phases"] for phase in known_phases)
+        ):
+            eligible = False
+            reason_code = "phase_not_allowed"
+            recommended_entry = _phase_recommendation(next_phase or current_phase)
 
     return {
         "entry": entry_name,

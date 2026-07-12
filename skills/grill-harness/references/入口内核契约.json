@@ -87,7 +87,7 @@
     },
     "grh-learn": {
       "kind": "workflow-entry",
-      "allowed_phases": ["knowledge_archive"],
+      "allowed_phases": ["preflight", "alignment", "requirements_baseline", "design", "route_selection", "repository_challenge", "specification", "final_spec_approval", "tasking", "implementation", "independent_assurance", "knowledge_archive"],
       "required_gates": [],
       "allowed_operations": ["search_knowledge", "retrospective", "archive_knowledge"],
       "forbidden_operations": ["implementation", "auto_route"],

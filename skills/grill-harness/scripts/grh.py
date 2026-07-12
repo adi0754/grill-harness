@@ -720,6 +720,9 @@ def _status(args):
             "current_phase": current,
             "next_eligible_phase": next_phase,
             "gates": workflow.get("gates", {}),
+            "phases": workflow.get("phases", []),
+            "evidence": workflow.get("evidence", []),
+            "archive_confirmation": workflow.get("archive_confirmation"),
             "reconciliation": reconciliation,
         }
     )

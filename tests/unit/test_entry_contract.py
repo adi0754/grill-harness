@@ -100,6 +100,83 @@ class EntryContractTests(unittest.TestCase):
                 )
                 self.assertFalse(decision["will_auto_route"])
 
+    def test_entry_is_blocked_when_current_and_next_phases_are_outside_its_contract(self):
+        approved = {
+            "final_spec_approval": {
+                "status": "approved",
+                "approval_id": "DEC-003",
+                "artifact_versions": {"specification": 1},
+            }
+        }
+        cases = (
+            ("grh-run", "specification", "specification", "grh-plan"),
+            ("grh-start", "implementation", "implementation", "grh-run"),
+        )
+        for entry, current, next_phase, recommended in cases:
+            with self.subTest(entry=entry):
+                decision = entry_contract.evaluate_entry_request(
+                    entry,
+                    {
+                        "status": "active",
+                        "current_phase": current,
+                        "next_eligible_phase": next_phase,
+                        "gates": approved,
+                    },
+                    {"valid": True, "conflicts": []},
+                )
+                self.assertFalse(decision["eligible"])
+                self.assertEqual(decision["reason_code"], "phase_not_allowed")
+                self.assertEqual(decision["recommended_entry"], recommended)
+
+    def test_learn_keeps_search_and_retrospective_but_restricts_unapproved_archive(self):
+        decision = entry_contract.evaluate_entry_request(
+            "grh-learn",
+            {
+                "status": "active",
+                "current_phase": "implementation",
+                "next_eligible_phase": "implementation",
+                "gates": {},
+                "phases": [{"id": "independent_assurance", "status": "pending"}],
+                "evidence": [],
+            },
+            {"valid": True, "conflicts": []},
+        )
+
+        self.assertTrue(decision["eligible"])
+        self.assertEqual(decision["reason_code"], "eligible_with_restricted_scope")
+        self.assertEqual(decision["allowed_scope"], ["search_knowledge", "retrospective"])
+        self.assertIn("archive_knowledge", decision["forbidden_scope"])
+        self.assertEqual(
+            decision["missing_prerequisites"],
+            ["independent_assurance_completed", "current_acceptance_passed", "archive_confirmed"],
+        )
+
+    def test_learn_allows_formal_archive_only_after_acceptance_and_confirmation(self):
+        decision = entry_contract.evaluate_entry_request(
+            "grh-learn",
+            {
+                "status": "active",
+                "current_phase": "knowledge_archive",
+                "next_eligible_phase": "knowledge_archive",
+                "gates": {},
+                "phases": [{"id": "independent_assurance", "status": "completed"}],
+                "evidence": [{
+                    "id": "EVD-001",
+                    "kind": "final_acceptance",
+                    "status": "completed",
+                    "result": "accepted",
+                    "current": True,
+                }],
+                "archive_confirmation": {"status": "approved"},
+            },
+            {"valid": True, "conflicts": []},
+            requested_scope=("archive_knowledge",),
+        )
+
+        self.assertTrue(decision["eligible"])
+        self.assertEqual(decision["allowed_scope"], ["archive_knowledge"])
+        self.assertEqual(decision["missing_prerequisites"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
