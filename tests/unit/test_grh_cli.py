@@ -160,6 +160,80 @@ class GrillHarnessCliTests(unittest.TestCase):
                     ])
             self.assertFalse((base / "storage").exists())
 
+    def test_entry_check_keeps_learn_search_available_without_required_capabilities(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            _, cli = self._isolated_harness(base, entries)
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({
+                "GRILL_HARNESS_TEST_ROOT": str(base / "storage"),
+                "PATH": "/usr/bin:/bin",
+            })
+            initialized = run_cli_at(
+                cli, "init", "--project", str(project), "--workflow-name", "学习",
+                "--created-date", "2026-07-12", env=env,
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stdout + initialized.stderr)
+            workflow = json.loads(initialized.stdout)["workflow_path"]
+
+            result = run_cli_at(
+                cli, "entry-check", "--entry", "grh-learn", "--project", str(project),
+                "--workflow", workflow, "--requested-scope", "search_knowledge", env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["decision"]["eligible"])
+            self.assertEqual(payload["decision"]["allowed_scope"], ["search_knowledge"])
+            self.assertEqual(payload["decision"]["reason_code"], "eligible_with_restricted_scope")
+            self.assertEqual(payload["preflight"]["missing_required"], [
+                "grilling", "domain-modeling", "codebase-design"
+            ])
+            self.assertTrue((base / "storage").exists())
+
+    def test_entry_check_blocks_learn_retrospective_without_required_capabilities(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            _, cli = self._isolated_harness(base, entries)
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({
+                "GRILL_HARNESS_TEST_ROOT": str(base / "storage"),
+                "PATH": "/usr/bin:/bin",
+            })
+            initialized = run_cli_at(
+                cli, "init", "--project", str(project), "--workflow-name", "复盘",
+                "--created-date", "2026-07-12", env=env,
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stdout + initialized.stderr)
+            workflow = json.loads(initialized.stdout)["workflow_path"]
+
+            result = run_cli_at(
+                cli, "entry-check", "--entry", "grh-learn", "--project", str(project),
+                "--workflow", workflow, "--requested-scope", "retrospective", env=env,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["decision"]["eligible"])
+            self.assertEqual(payload["decision"]["allowed_scope"], [])
+            self.assertEqual(
+                payload["decision"]["reason_code"], "missing_required_capabilities"
+            )
+            self.assertIn("retrospective", payload["decision"]["forbidden_scope"])
+            self.assertTrue((base / "storage").exists())
+
     def test_entry_check_allows_start_for_not_started_project_without_writes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)

@@ -769,7 +769,32 @@ def _entry_check(args):
         decision["recommended_entry"] = None
     diagnostic_entries = {"grill-harness", "grh-upstream-check"}
     missing_required = list(preflight_report["missing_required"])
-    if missing_required and args.entry not in diagnostic_entries:
+    if missing_required and args.entry == "grh-learn":
+        dependency_free_operations = {"search_knowledge"}
+        dependency_blocked = [
+            operation for operation in decision["allowed_scope"]
+            if operation not in dependency_free_operations
+        ]
+        dependency_free = [
+            operation for operation in decision["allowed_scope"]
+            if operation in dependency_free_operations
+        ]
+        decision["missing_prerequisites"] = list(dict.fromkeys(
+            list(decision["missing_prerequisites"]) + missing_required
+        ))
+        decision["forbidden_scope"] = list(dict.fromkeys(
+            list(decision["forbidden_scope"]) + dependency_blocked
+        ))
+        decision["allowed_scope"] = dependency_free
+        if decision["eligible"] and dependency_free:
+            decision["reason_code"] = "eligible_with_restricted_scope"
+        elif not dependency_free:
+            was_eligible = decision["eligible"]
+            decision["eligible"] = False
+            if was_eligible:
+                decision["reason_code"] = "missing_required_capabilities"
+                decision["recommended_entry"] = None
+    elif missing_required and args.entry not in diagnostic_entries:
         was_eligible = decision["eligible"]
         decision["eligible"] = False
         if was_eligible:

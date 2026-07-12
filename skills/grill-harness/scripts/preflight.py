@@ -12,6 +12,7 @@ REQUIRED_CAPABILITIES = ("grilling", "domain-modeling", "codebase-design")
 COMPATIBILITY_REFERENCES = ("grill-with-docs",)
 PUBLIC_ENTRIES = tuple(entry_contract.PUBLIC_ENTRIES)
 ENTRY_CORE_CONTRACT_VERSION = entry_contract.ENTRY_CORE_CONTRACT_VERSION
+EXPECTED_CORE_SCRIPT = "scripts/grh.py"
 
 
 def _default_runner(command):
@@ -162,21 +163,27 @@ def _core_contract(core_path):
     declared_entries = contract.get("entries")
     core = contract.get("core")
     core_script = core.get("entry_check_script") if isinstance(core, dict) else None
-    script_path = Path(core_script) if isinstance(core_script, str) else None
-    safe_relative_script = (
-        script_path is not None
-        and bool(core_script.strip())
-        and not script_path.is_absolute()
-        and ".." not in script_path.parts
-    )
+    script_path = Path(EXPECTED_CORE_SCRIPT)
+    contract_declares_canonical_script = core_script == EXPECTED_CORE_SCRIPT
     core_script_verified = False
-    if safe_relative_script:
-        resolved_script = Path(core_path) / script_path
+    if contract_declares_canonical_script:
+        core_root = Path(core_path)
+        candidate = core_root / script_path
         try:
-            with resolved_script.open("rb") as source:
+            resolved_root = core_root.resolve(strict=True)
+            resolved_script = candidate.resolve(strict=True)
+            resolved_script.relative_to(resolved_root)
+            current = core_root
+            has_symlink_component = False
+            for part in script_path.parts:
+                current = current / part
+                if current.is_symlink():
+                    has_symlink_component = True
+                    break
+            with candidate.open("rb") as source:
                 source.read(1)
-            core_script_verified = resolved_script.is_file() and not resolved_script.is_symlink()
-        except OSError:
+            core_script_verified = candidate.is_file() and not has_symlink_component
+        except (OSError, ValueError):
             core_script_verified = False
     compatible = (
         version == ENTRY_CORE_CONTRACT_VERSION
@@ -230,6 +237,7 @@ def verify_public_entries(inventory, invoking_entry=None):
         "expected_contract_version": ENTRY_CORE_CONTRACT_VERSION,
         "contract_compatible": contract_compatible,
         "core_script": core_script,
+        "expected_core_script": EXPECTED_CORE_SCRIPT,
         "core_script_verified": core_script_verified,
         "actions_performed": False,
     }
@@ -323,6 +331,7 @@ def run_preflight(
             "expected_contract_version": ENTRY_CORE_CONTRACT_VERSION,
             "contract_compatible": None,
             "core_script": None,
+            "expected_core_script": EXPECTED_CORE_SCRIPT,
             "core_script_verified": None,
             "actions_performed": False,
         }
@@ -359,6 +368,7 @@ def run_preflight(
 __all__ = [
     "COMPATIBILITY_REFERENCES",
     "ENTRY_CORE_CONTRACT_VERSION",
+    "EXPECTED_CORE_SCRIPT",
     "PUBLIC_ENTRIES",
     "REQUIRED_CAPABILITIES",
     "run_preflight",

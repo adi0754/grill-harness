@@ -223,6 +223,55 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(installation["core_script"], "scripts/grh.py")
             self.assertFalse(installation["core_script_verified"])
 
+    def test_contract_cannot_substitute_skill_markdown_for_missing_canonical_core_script(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = self._public_installation(root)
+            core = root / "grill-harness"
+            (core / "scripts" / "grh.py").unlink()
+            contract = core / "references" / "入口内核契约.json"
+            payload = json.loads(contract.read_text(encoding="utf-8"))
+            payload["core"]["entry_check_script"] = "SKILL.md"
+            contract.write_text(json.dumps(payload), encoding="utf-8")
+            runner = FakeRunner(self._safe_cli_responses({"skills": entries}, {"skills": []}))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-plan",
+            )
+
+            installation = report["harness_installation"]
+            self.assertFalse(report["entry_ready"])
+            self.assertFalse(installation["contract_compatible"])
+            self.assertEqual(installation["core_script"], "SKILL.md")
+            self.assertEqual(installation["expected_core_script"], "scripts/grh.py")
+            self.assertFalse(installation["core_script_verified"])
+
+    def test_core_script_cannot_escape_through_symlinked_ancestor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = self._public_installation(root)
+            core = root / "grill-harness"
+            shutil_target = root / "outside-scripts"
+            shutil_target.mkdir()
+            shutil_target.joinpath("grh.py").write_text("pass\n", encoding="utf-8")
+            (core / "scripts" / "grh.py").unlink()
+            (core / "scripts").rmdir()
+            (core / "scripts").symlink_to(shutil_target, target_is_directory=True)
+            runner = FakeRunner(self._safe_cli_responses({"skills": entries}, {"skills": []}))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-plan",
+            )
+
+            self.assertFalse(report["entry_ready"])
+            self.assertFalse(
+                report["harness_installation"]["core_script_verified"]
+            )
+
     def test_public_entries_use_cli_success_and_filesystem_fallback_for_failed_scope(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
