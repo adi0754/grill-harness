@@ -807,6 +807,27 @@ def _entry_check(args):
             list(decision["forbidden_scope"]) + list(decision["allowed_scope"])
         ))
         decision["allowed_scope"] = []
+    learn_search_override = (
+        args.entry == "grh-learn"
+        and preflight_report["entry_ready"]
+        and "search_knowledge" in decision["allowed_scope"]
+        and (
+            status_report.get("status") == "not_started"
+            or not status_report["reconciliation"].get("valid", False)
+        )
+    )
+    if learn_search_override:
+        blocked = [
+            operation for operation in decision["allowed_scope"]
+            if operation != "search_knowledge"
+        ]
+        decision["eligible"] = True
+        decision["reason_code"] = "eligible_with_restricted_scope"
+        decision["allowed_scope"] = ["search_knowledge"]
+        decision["forbidden_scope"] = list(dict.fromkeys(
+            list(decision["forbidden_scope"]) + blocked
+        ))
+        decision["recommended_entry"] = None
     control = entry_contract.entry_control_summary(args.entry, status_report, decision)
     return (0 if decision["eligible"] else 1), {
         "ok": decision["eligible"],
