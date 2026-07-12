@@ -127,6 +127,10 @@ class TemplateContractTests(unittest.TestCase):
         self.assertLess(state_machine.index("自适应需求雷达"), state_machine.index("需求基线"))
         self.assertIn("三个门禁仍分别批准", state_machine)
         self.assertNotIn("将三者合并为一次明确授权", state_machine)
+        self.assertIn("`design` 或 `repository_challenge`", state_machine)
+        self.assertIn("研究/原型产物不得标记为机器 phase", state_machine)
+        self.assertIn("也不得把所属必需 phase 标记为 `skipped`", state_machine)
+        self.assertNotIn("研究与原型**：仅在所选路线依赖未验证事实时进入，可跳过", state_machine)
 
         for marker in (
             "需求雷达.md",
@@ -163,6 +167,11 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("failure-record", assurance)
         self.assertIn("review_history", assurance)
         self.assertIn("可选建议", assurance)
+        self.assertIn("失败或无法验证的工作流只保留真实结论", assurance)
+        self.assertIn("不得完成正式归档", assurance)
+        self.assertIn("仅确认的 `route_failure`", assurance)
+        self.assertIn("项目级失败事实", assurance)
+        self.assertIn("不能完成 `knowledge_archive`", assurance)
 
     def test_readme_documents_all_entries_verified_install_and_knowledge_boundaries(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

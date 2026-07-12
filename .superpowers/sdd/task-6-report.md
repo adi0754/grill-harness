@@ -76,3 +76,10 @@ Result: passed with no output.
 - Confirmed all automatic install/update/chaining mentions are prohibitions, not promises.
 - Confirmed no personal paths or credentials were added.
 - Confirmed no result artifact claims the eight new model scenarios passed.
+
+## Review follow-up
+
+Resolved the post-commit Important and Minor documentation findings:
+
+- failure or unverifiable workflows now explicitly retain only truthful conclusions and cannot complete formal archive; only a confirmed `route_failure` may persist project-level failure facts, without completing `knowledge_archive` or promoting general knowledge;
+- the state-machine reference now lists the exact twelve `state.py` phases and places research/prototype work only as optional artifacts inside `design` or `repository_challenge`; optional artifact omission never marks a required machine phase `skipped`.
