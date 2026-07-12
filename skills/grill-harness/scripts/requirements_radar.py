@@ -79,6 +79,29 @@ def validate_radar_record(record):
         conflicts.append(_conflict("blocking_level", "unknown blocking level"))
     if record.get("status") not in RADAR_STATUSES:
         conflicts.append(_conflict("status", "unknown radar status"))
+    risk_signals = record.get("risk_signals")
+    if not isinstance(risk_signals, Mapping) or any(
+        not isinstance(key, str) or not isinstance(value, bool)
+        for key, value in risk_signals.items()
+    ):
+        conflicts.append(
+            _conflict("risk_signals", "risk signals must be a mapping of booleans")
+        )
+        derived_escalation = None
+    else:
+        derived_escalation = classify_escalation(risk_signals)["level"]
+    escalation = record.get("escalation")
+    if escalation not in ("low", "medium", "high"):
+        conflicts.append(
+            _conflict("escalation", "radar escalation must be low, medium, or high")
+        )
+    elif derived_escalation is not None and escalation != derived_escalation:
+        conflicts.append(
+            _conflict(
+                "escalation",
+                "radar escalation must match the level derived from risk signals",
+            )
+        )
     requirements = record.get("requirements")
     decisions = record.get("decisions")
     if not _string_list(requirements, allow_empty=True) or not _string_list(
@@ -90,8 +113,8 @@ def validate_radar_record(record):
                 "radar record must link at least one requirement or decision",
             )
         )
-    if record.get("escalation") == "high":
-        investigation = record.get("investigation")
+    if derived_escalation == "high":
+        investigation = record.get("investigation_plan")
         required = (
             "reason",
             "question",
@@ -100,28 +123,30 @@ def validate_radar_record(record):
         )
         if not isinstance(investigation, Mapping):
             conflicts.append(
-                _conflict("investigation", "high risk requires an investigation plan")
+                _conflict(
+                    "investigation_plan", "high risk requires an investigation plan"
+                )
             )
         else:
             for field in required:
                 if not _non_empty_string(investigation.get(field)):
                     conflicts.append(
                         _conflict(
-                            "investigation.{}".format(field),
+                            "investigation_plan.{}".format(field),
                             "investigation {} must be non-empty".format(field),
                         )
                     )
             if not isinstance(investigation.get("blocks_baseline"), bool):
                 conflicts.append(
                     _conflict(
-                        "investigation.blocks_baseline",
+                        "investigation_plan.blocks_baseline",
                         "investigation must state whether it blocks the baseline",
                     )
                 )
             if investigation.get("agent_selection") != "needs_user":
                 conflicts.append(
                     _conflict(
-                        "investigation.agent_selection",
+                        "investigation_plan.agent_selection",
                         "independent investigation agent selection must remain user controlled",
                     )
                 )
@@ -228,13 +253,36 @@ def traceability_report(records, artifacts):
     )
     artifacts = artifacts if isinstance(artifacts, Mapping) else {}
     missing = {}
+    conflicts = []
     for artifact_name in TRACE_ARTIFACTS:
         artifact = artifacts.get(artifact_name, {})
-        linked = artifact.get("radar_ids", ()) if isinstance(artifact, Mapping) else ()
+        linked = artifact.get("radar_ids") if isinstance(artifact, Mapping) else None
+        if not (
+            isinstance(linked, Sequence)
+            and not isinstance(linked, (str, bytes, bytearray, Mapping))
+        ):
+            conflicts.append(
+                {
+                    "artifact": artifact_name,
+                    "field": "radar_ids",
+                    "conflict": "artifact radar_ids must be a non-string sequence",
+                }
+            )
+            continue
+        invalid = [record_id for record_id in linked if not _is_radar_id(record_id)]
+        if invalid:
+            conflicts.append(
+                {
+                    "artifact": artifact_name,
+                    "field": "radar_ids",
+                    "conflict": "artifact radar_ids contain invalid stable IDs",
+                }
+            )
+            continue
         absent = [record_id for record_id in radar_ids if record_id not in linked]
         if absent:
             missing[artifact_name] = absent
-    return {"valid": not missing, "missing": missing}
+    return {"valid": not missing and not conflicts, "missing": missing, "conflicts": conflicts}
 
 
 __all__ = [

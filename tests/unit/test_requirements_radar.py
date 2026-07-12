@@ -25,6 +25,8 @@ class RequirementsRadarTests(unittest.TestCase):
             "status": "open",
             "requirements": ["REQ-001"],
             "decisions": [],
+            "risk_signals": {},
+            "escalation": "low",
         }
         record.update(changes)
         return record
@@ -73,7 +75,8 @@ class RequirementsRadarTests(unittest.TestCase):
     def test_high_risk_investigation_is_explicit_and_user_controlled(self):
         record = self.radar(
             escalation="high",
-            investigation={
+            risk_signals={"public_contract_change": True},
+            investigation_plan={
                 "reason": "公共 Schema 变化",
                 "question": "哪些消费者必须同步迁移？",
                 "role": "repository-investigator",
@@ -84,10 +87,38 @@ class RequirementsRadarTests(unittest.TestCase):
         )
         self.assertTrue(requirements_radar.validate_radar_record(record)["valid"])
 
-        record["investigation"]["agent_selection"] = "auto-dispatched"
+        record["investigation_plan"]["agent_selection"] = "auto-dispatched"
         report = requirements_radar.validate_radar_record(record)
         self.assertFalse(report["valid"])
         self.assertIn("user", report["conflicts"][0]["conflict"])
+
+    def test_escalation_cannot_be_missing_or_downgraded_from_risk_signals(self):
+        missing = self.radar()
+        del missing["escalation"]
+        missing_report = requirements_radar.validate_radar_record(missing)
+        self.assertFalse(missing_report["valid"])
+        self.assertEqual(missing_report["conflicts"][0]["field"], "escalation")
+
+        downgraded = self.radar(
+            escalation="medium",
+            risk_signals={"schema_change": True},
+        )
+        downgraded_report = requirements_radar.validate_radar_record(downgraded)
+        self.assertFalse(downgraded_report["valid"])
+        self.assertTrue(
+            any(item["field"] == "escalation" for item in downgraded_report["conflicts"])
+        )
+
+    def test_derived_high_risk_cannot_omit_investigation_plan(self):
+        record = self.radar(
+            escalation="high",
+            risk_signals={"impact_unknown": True},
+        )
+        report = requirements_radar.validate_radar_record(record)
+        self.assertFalse(report["valid"])
+        self.assertTrue(
+            any(item["field"] == "investigation_plan" for item in report["conflicts"])
+        )
 
     def test_only_current_open_baseline_records_block_approval(self):
         records = [
@@ -178,6 +209,23 @@ class RequirementsRadarTests(unittest.TestCase):
         self.assertFalse(report["valid"])
         self.assertEqual(
             report["missing"], {"repository_challenge": ["RAD-002"]}
+        )
+
+    def test_traceability_rejects_string_and_invalid_radar_id_contracts(self):
+        records = [self.radar(id="RAD-001")]
+        artifacts = {
+            name: {"radar_ids": ["RAD-001"]}
+            for name in requirements_radar.TRACE_ARTIFACTS
+        }
+        artifacts["route_card"] = {"radar_ids": "RAD-001"}
+        artifacts["final_spec"] = {"radar_ids": ["REQ-001"]}
+
+        report = requirements_radar.traceability_report(records, artifacts)
+
+        self.assertFalse(report["valid"])
+        self.assertEqual(
+            {item["artifact"] for item in report["conflicts"]},
+            {"route_card", "final_spec"},
         )
 
 

@@ -41,3 +41,10 @@
 - `python3 -m unittest discover -s tests -p 'test_*.py'`：222 项通过。
 - `python3 -m py_compile skills/grill-harness/scripts/*.py`：通过。
 - `git diff --check`：通过。
+
+## 审查修复追加
+
+- 强制每个 RAD record 提供 `risk_signals` 布尔映射与合法 `escalation`（low / medium / high），且 escalation 必须与 `classify_escalation(risk_signals)` 推导结果完全一致，禁止缺失或降级绕过。
+- 推导结果为 high 时，强制完整 `investigation_plan`，并要求 `agent_selection=needs_user`；缺失计划或自动派发均拒绝。
+- `traceability_report()` 现在严格要求每个下游产物的 `radar_ids` 为非字符串序列，且每项均满足严格 `RAD-[0-9]{3,}`；容器或 ID 非法时返回 contract conflict。
+- 新增 3 个绕过回归测试；目标组合 37 项通过，全量 225 项通过。

@@ -12,6 +12,8 @@
       "owner": "main-agent",
       "blocking_level": "baseline",
       "status": "open",
+      "risk_signals": {},
+      "escalation": "low",
       "requirements": ["REQ-001"],
       "decisions": []
     }
