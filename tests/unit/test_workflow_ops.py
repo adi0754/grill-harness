@@ -4,7 +4,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import grh
 import state
+import workflow_ops
 
 
 def run_cli(*arguments, env=None):
@@ -537,6 +540,285 @@ class WorkflowOperationTests(unittest.TestCase):
             self.assertIn(
                 "cannot be changed to optional",
                 json.loads(result.stdout)["error"]["message"],
+            )
+
+    def test_failure_record_atomically_persists_same_issue_attempts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env, workflow = self._workflow(base)
+            state_path = workflow / "系统" / "state.yaml"
+
+            results = [
+                run_cli(
+                    "failure-record",
+                    "--workflow",
+                    str(workflow),
+                    "--project",
+                    str(base / "project"),
+                    "--failure-class",
+                    "implementation_failure",
+                    "--issue-id",
+                    "ISSUE-007",
+                    "--failed-acceptance",
+                    "REQ-004",
+                    "--evidence",
+                    "EVD-007",
+                    env=env,
+                )
+                for _ in range(3)
+            ]
+
+            self.assertEqual(
+                [result.returncode for result in results],
+                [0, 0, 0],
+                [result.stdout for result in results],
+            )
+            payloads = [json.loads(result.stdout)["failure"] for result in results]
+            self.assertEqual(
+                [item["action"] for item in payloads],
+                ["minimal_fix", "root_cause_recheck", "recover_required"],
+            )
+            persisted = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(persisted["failure_attempts"]), 3)
+            self.assertEqual(
+                [item["attempt_count"] for item in persisted["failure_attempts"]],
+                [1, 2, 3],
+            )
+            package = workflow / "过程产物" / "审查修复" / "TASK-REPAIR-修复任务.md"
+            package.parent.mkdir(parents=True, exist_ok=True)
+            package.write_text("repair package\n", encoding="utf-8")
+            startup = workflow / "过程产物" / "审查修复" / "TASK-REPAIR-启动提示词.md"
+            startup.write_text("read repair package\n", encoding="utf-8")
+            output = workflow / "过程产物" / "审查修复" / "TASK-REPAIR-报告.md"
+            task_record = workflow / "系统" / "repair-task.yaml"
+            task_record.write_text(
+                json.dumps(
+                    {
+                        "id": "TASK-REPAIR",
+                        "task_type": "repair",
+                        "repair_mode": "ordinary",
+                        "failure_class": "implementation_failure",
+                        "failure_fingerprint": payloads[-1]["fingerprint"],
+                        "attempt_count": 3,
+                        "status": "pending",
+                        "currentness": "current",
+                        "parallel_group": "serial-repair",
+                        "depends_on": [],
+                        "blockers": [],
+                        "trace_ids": ["REQ-004", "ISSUE-007"],
+                        "acceptance_ids": ["REQ-004"],
+                        "allowed_paths": ["src"],
+                        "forbidden_paths": ["secrets"],
+                        "write_paths": ["src"],
+                        "shared_contracts": [],
+                        "migrations": [],
+                        "generated_files": [],
+                        "git_baseline": persisted["git_baseline"],
+                        "worktree": str(base / "worktree"),
+                        "branch": "repair/TASK-REPAIR",
+                        "task_package_path": str(package),
+                        "startup_prompt_path": str(startup),
+                        "output_path": str(output),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            repair = run_cli(
+                "record",
+                "--workflow",
+                str(workflow),
+                "--kind",
+                "task",
+                "--record",
+                str(task_record),
+                env=env,
+            )
+
+            self.assertEqual(repair.returncode, 2, repair.stdout)
+            self.assertIn("grh-recover", json.loads(repair.stdout)["error"]["message"])
+
+            persisted["failure_attempts"][-1].update(
+                {
+                    "attempt_count": 1,
+                    "action": "minimal_fix",
+                    "ordinary_repair_allowed": True,
+                }
+            )
+            state_path.write_text(json.dumps(persisted), encoding="utf-8")
+            tampered_task = json.loads(task_record.read_text(encoding="utf-8"))
+            tampered_task.update({"id": "TASK-TAMPER", "attempt_count": 2})
+            task_record.write_text(json.dumps(tampered_task), encoding="utf-8")
+
+            tampered = run_cli(
+                "record",
+                "--workflow",
+                str(workflow),
+                "--kind",
+                "task",
+                "--record",
+                str(task_record),
+                env=env,
+            )
+
+            self.assertEqual(tampered.returncode, 2, tampered.stdout)
+            self.assertIn(
+                "contiguous", json.loads(tampered.stdout)["error"]["message"]
+            )
+
+    def test_failure_threshold_override_uses_persisted_user_decision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env, workflow = self._workflow(base)
+            state_path = workflow / "系统" / "state.yaml"
+            approval = workflow / "系统" / "failure-threshold-decision.yaml"
+            approval.write_text(
+                json.dumps(
+                    {
+                        "id": "DEC-401",
+                        "type": "DEC",
+                        "version": 1,
+                        "summary": "用户批准把同问题阈值提高到四轮",
+                        "status": "approved",
+                        "approved_by": "user",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            registered = run_cli(
+                "record",
+                "--workflow",
+                str(workflow),
+                "--kind",
+                "ledger",
+                "--record",
+                str(approval),
+                env=env,
+            )
+            before_invalid = state_path.read_text(encoding="utf-8")
+            common_arguments = (
+                "failure-record",
+                "--workflow",
+                str(workflow),
+                "--project",
+                str(base / "project"),
+                "--failure-class",
+                "implementation_failure",
+                "--issue-id",
+                "ISSUE-401",
+                "--failed-command",
+                "python3 -m unittest",
+                "--threshold",
+                "4",
+                "--override-reason",
+                "用户要求用第四轮验证新根因",
+            )
+
+            invalid = run_cli(
+                *common_arguments, "--approval-id", "DEC-404", env=env
+            )
+            after_invalid = state_path.read_text(encoding="utf-8")
+            valid = [
+                run_cli(
+                    *common_arguments, "--approval-id", "DEC-401", env=env
+                )
+                for _ in range(4)
+            ]
+
+            self.assertEqual(registered.returncode, 0, registered.stdout)
+            self.assertEqual(invalid.returncode, 2, invalid.stdout)
+            self.assertEqual(after_invalid, before_invalid)
+            self.assertEqual([item.returncode for item in valid], [0, 0, 0, 0])
+            actions = [json.loads(item.stdout)["failure"]["action"] for item in valid]
+            self.assertEqual(
+                actions,
+                [
+                    "minimal_fix",
+                    "root_cause_recheck",
+                    "root_cause_recheck",
+                    "recover_required",
+                ],
+            )
+
+    def test_concurrent_failure_records_keep_every_unique_attempt_number(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env, workflow = self._workflow(base)
+            arguments = (
+                "failure-record",
+                "--workflow",
+                str(workflow),
+                "--project",
+                str(base / "project"),
+                "--failure-class",
+                "implementation_failure",
+                "--issue-id",
+                "ISSUE-777",
+                "--failed-acceptance",
+                "REQ-777",
+            )
+
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                results = list(
+                    executor.map(
+                        lambda _: run_cli(*arguments, env=env),
+                        range(6),
+                    )
+                )
+
+            self.assertEqual([item.returncode for item in results], [0] * 6)
+            persisted = json.loads(
+                (workflow / "系统" / "state.yaml").read_text(encoding="utf-8")
+            )["failure_attempts"]
+            self.assertEqual(len(persisted), 6)
+            self.assertEqual(
+                sorted(item["attempt_count"] for item in persisted),
+                [1, 2, 3, 4, 5, 6],
+            )
+            self.assertEqual(len({item["fingerprint"] for item in persisted}), 1)
+
+    def test_failure_record_rolls_back_all_files_after_post_replace_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env, workflow = self._workflow(base)
+            state_path = workflow / "系统" / "state.yaml"
+            baseline = json.loads(state_path.read_text(encoding="utf-8"))["git_baseline"]
+            tracked = [
+                state_path,
+                workflow / "系统" / "artifacts.yaml",
+                workflow / "系统" / "tasks.yaml",
+                workflow / "系统" / "evidence.yaml",
+            ]
+            before = {path: path.read_bytes() for path in tracked}
+            original_unlink = Path.unlink
+            failed = {"value": False}
+
+            def fail_first_journal_unlink(path, *args, **kwargs):
+                if (
+                    path.name == workflow_ops.TRANSACTION_FILE
+                    and not failed["value"]
+                ):
+                    failed["value"] = True
+                    raise OSError("simulated post-replace failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(Path, "unlink", fail_first_journal_unlink):
+                    with self.assertRaisesRegex(OSError, "post-replace"):
+                        workflow_ops.record_failure_attempt(
+                            workflow,
+                            {
+                                "failure_class": "implementation_failure",
+                                "issue_id": "ISSUE-778",
+                                "failed_acceptance": ["REQ-778"],
+                            },
+                            current_baseline=baseline,
+                        )
+
+            after = {path: path.read_bytes() for path in tracked}
+            self.assertEqual(after, before)
+            self.assertFalse(
+                (workflow / "系统" / workflow_ops.TRANSACTION_FILE).exists()
             )
 
 

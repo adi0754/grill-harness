@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import common
+import failure_control
 import requirements_radar
 import state
 import task_graph
@@ -146,6 +147,93 @@ def _validate_task_contract(record, workflow_root):
         raise ValueError("task startup prompt file does not exist")
 
 
+def _validate_repair_task_policy(record, workflow):
+    is_repair = (
+        record.get("task_type") == "repair"
+        or record.get("kind") == "repair"
+        or record.get("failure_fingerprint") is not None
+    )
+    if not is_repair:
+        return
+    failure_class = record.get("failure_class")
+    fingerprint = record.get(
+        "failure_fingerprint", record.get("fingerprint")
+    )
+    if failure_class not in failure_control.FAILURE_CLASSES:
+        raise ValueError("repair task requires a confirmed failure class")
+    if not isinstance(fingerprint, str) or not fingerprint.strip():
+        raise ValueError("repair task requires a stable failure fingerprint")
+    history = workflow.get("failure_attempts", [])
+    if not isinstance(history, list):
+        raise ValueError("failure_attempts must be a list")
+    matching = [
+        item
+        for item in history
+        if isinstance(item, dict) and item.get("fingerprint") == fingerprint
+    ]
+    if not matching:
+        raise ValueError("repair task fingerprint has no recorded failure attempt")
+    if any(
+        not isinstance(item.get("attempt_count"), int)
+        or isinstance(item.get("attempt_count"), bool)
+        or item["attempt_count"] < 1
+        for item in matching
+    ):
+        raise ValueError("recorded failure attempt_count is invalid")
+    if [item["attempt_count"] for item in matching] != list(
+        range(1, len(matching) + 1)
+    ):
+        raise ValueError(
+            "recorded failure attempts must be contiguous in persistence order"
+        )
+    latest = matching[-1]
+    if latest.get("failure_class") != failure_class:
+        raise ValueError("repair task failure class contradicts recorded attempts")
+    declared_attempt = record.get("attempt_count")
+    if (
+        not isinstance(declared_attempt, int)
+        or isinstance(declared_attempt, bool)
+        or declared_attempt < 1
+        or declared_attempt != latest.get("attempt_count")
+    ):
+        raise ValueError("repair task attempt_count must match recorded failure history")
+    if failure_control.issue_fingerprint(latest) != fingerprint:
+        raise ValueError("recorded failure fingerprint contradicts its structured facts")
+    threshold = latest.get("threshold")
+    if threshold == failure_control.DEFAULT_ATTEMPT_THRESHOLD:
+        pass
+    elif isinstance(threshold, int) and not isinstance(threshold, bool):
+        override = latest.get("threshold_override")
+        if not isinstance(override, dict):
+            raise ValueError("recorded failure threshold lacks a user-approved override")
+        override_report = failure_control.validate_threshold_override(
+            dict(override, threshold=threshold), workflow.get("ledger", ())
+        )
+        if not override_report["valid"]:
+            raise ValueError(override_report["conflicts"][0]["conflict"])
+    else:
+        raise ValueError("recorded failure threshold is invalid")
+    policy = failure_control.next_action(
+        failure_class,
+        attempt_count=declared_attempt,
+        threshold=threshold,
+    )
+    ordinary = record.get("repair_mode", "ordinary") == "ordinary"
+    if ordinary and not policy["ordinary_repair_allowed"]:
+        action = policy["action"]
+        if action == "recover_required":
+            raise ValueError(
+                "third same implementation failure blocks ordinary repair; use grh-recover"
+            )
+        if action == "human_route_selection":
+            raise ValueError(
+                "route failure requires user route selection in grh-recover; no alternative is auto-selected"
+            )
+        if action == "more_evidence_required":
+            raise ValueError("evidence failure requires more evidence before repair")
+        raise ValueError("workflow integrity failure requires reconcile before repair")
+
+
 def _write(state_path, workflow, manifests, extra_payloads=None):
     system = state_path.parent
     ledger_path = state_path.parent.parent / "核心文档" / "决策账本.yaml"
@@ -251,6 +339,7 @@ def register_record(
                     "new task must start pending and current; use task-transition later"
                 )
             _validate_task_contract(record, workflow_root)
+            _validate_repair_task_policy(record, workflow)
             graph = task_graph.validate_dag(updated_records)
             if not graph["valid"]:
                 raise ValueError(graph["conflicts"][0]["conflict"])
@@ -728,6 +817,41 @@ def transition_task(
     return {"task": task_id, "status": target, "workflow_path": str(state_path)}
 
 
+def record_failure_attempt(
+    workflow_value,
+    failure,
+    *,
+    current_baseline,
+    threshold_override=None,
+):
+    """Atomically append one classified failure attempt to workflow state."""
+
+    if not isinstance(current_baseline, str) or not current_baseline.strip():
+        raise ValueError("failure recording requires the current project baseline")
+    if not isinstance(failure, dict):
+        raise ValueError("failure facts must be a mapping")
+    state_path = _state_path(workflow_value)
+    lock = state_path.parent / ".workflow.lock"
+    with common.exclusive_directory_lock(lock):
+        workflow, manifests = _load(state_path)
+        history = workflow.get("failure_attempts", [])
+        if not isinstance(history, list):
+            raise ValueError("failure_attempts must be a list")
+        facts = dict(failure, git_baseline=current_baseline)
+        report = failure_control.record_attempt(
+            history,
+            facts,
+            threshold_override=threshold_override,
+            ledger=workflow.get("ledger", ()),
+        )
+        updated = dict(workflow)
+        updated["failure_attempts"] = report["history"]
+        _write(state_path, updated, manifests)
+    result = {key: value for key, value in report.items() if key != "history"}
+    result["workflow_path"] = str(state_path)
+    return result
+
+
 def parse_artifact_versions(values):
     result = {}
     for value in values:
@@ -747,6 +871,7 @@ __all__ = [
     "approve_gate",
     "parse_artifact_versions",
     "commit_knowledge_update",
+    "record_failure_attempt",
     "register_record",
     "transition_task",
     "transition_phase",

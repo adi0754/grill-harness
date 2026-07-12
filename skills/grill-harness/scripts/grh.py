@@ -12,6 +12,7 @@ from pathlib import Path
 
 import common
 import entry_contract
+import failure_control
 import knowledge
 import migration
 import preflight
@@ -895,6 +896,42 @@ def _task_transition(args):
     }
 
 
+def _failure_record(args):
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
+    workflow_path = _workflow_file(args.workflow)
+    workflow_state = common.read_yaml(workflow_path)
+    if (
+        not isinstance(workflow_state, Mapping)
+        or workflow_state.get("project_id") != identity.project_id
+    ):
+        raise ValueError("project does not own the selected workflow")
+    override = None
+    if any(
+        value is not None
+        for value in (args.threshold, args.approval_id, args.override_reason)
+    ):
+        override = {
+            "threshold": args.threshold,
+            "approval_id": args.approval_id,
+            "reason": args.override_reason,
+        }
+    report = workflow_ops.record_failure_attempt(
+        workflow_path,
+        {
+            "failure_class": args.failure_class,
+            "issue_id": args.issue_id,
+            "failed_acceptance": args.failed_acceptance,
+            "failed_command": args.failed_command,
+            "evidence": args.evidence,
+        },
+        current_baseline=_current_baseline(args.project, identity),
+        threshold_override=override,
+    )
+    return 0, {"ok": True, "command": "failure-record", "failure": report}
+
+
 def _authorize_knowledge_mutation(args, operation):
     identity = _identity_for_stored_project(
         state.identify_project(Path(args.project))
@@ -1064,6 +1101,21 @@ def _parser():
     task_transition.add_argument("--evidence", action="append")
     task_transition.add_argument("--project", required=True)
     task_transition.set_defaults(handler=_task_transition)
+
+    failure_record = commands.add_parser("failure-record")
+    failure_record.add_argument("--workflow", required=True)
+    failure_record.add_argument("--project", required=True)
+    failure_record.add_argument(
+        "--failure-class", choices=sorted(failure_control.FAILURE_CLASSES), required=True
+    )
+    failure_record.add_argument("--issue-id", required=True)
+    failure_record.add_argument("--failed-acceptance", action="append", default=[])
+    failure_record.add_argument("--failed-command", action="append", default=[])
+    failure_record.add_argument("--evidence", action="append", default=[])
+    failure_record.add_argument("--threshold", type=int)
+    failure_record.add_argument("--approval-id")
+    failure_record.add_argument("--override-reason")
+    failure_record.set_defaults(handler=_failure_record)
 
     knowledge_query = commands.add_parser("knowledge-query")
     knowledge_query.add_argument("--project", required=True)
