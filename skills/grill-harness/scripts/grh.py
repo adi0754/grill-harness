@@ -767,6 +767,21 @@ def _entry_check(args):
         ))
         decision["allowed_scope"] = []
         decision["recommended_entry"] = None
+    diagnostic_entries = {"grill-harness", "grh-upstream-check"}
+    missing_required = list(preflight_report["missing_required"])
+    if missing_required and args.entry not in diagnostic_entries:
+        was_eligible = decision["eligible"]
+        decision["eligible"] = False
+        if was_eligible:
+            decision["reason_code"] = "missing_required_capabilities"
+            decision["recommended_entry"] = None
+        decision["missing_prerequisites"] = list(dict.fromkeys(
+            list(decision["missing_prerequisites"]) + missing_required
+        ))
+        decision["forbidden_scope"] = list(dict.fromkeys(
+            list(decision["forbidden_scope"]) + list(decision["allowed_scope"])
+        ))
+        decision["allowed_scope"] = []
     control = entry_contract.entry_control_summary(args.entry, status_report, decision)
     return (0 if decision["eligible"] else 1), {
         "ok": decision["eligible"],

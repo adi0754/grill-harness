@@ -152,20 +152,39 @@ def _verify(name, candidates):
 
 def _core_contract(core_path):
     if not core_path:
-        return None, False
+        return None, False, None, False
     contract_path = Path(core_path) / "references" / "入口内核契约.json"
     try:
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return None, False
+        return None, False, None, False
     version = contract.get("contract_version")
     declared_entries = contract.get("entries")
+    core = contract.get("core")
+    core_script = core.get("entry_check_script") if isinstance(core, dict) else None
+    script_path = Path(core_script) if isinstance(core_script, str) else None
+    safe_relative_script = (
+        script_path is not None
+        and bool(core_script.strip())
+        and not script_path.is_absolute()
+        and ".." not in script_path.parts
+    )
+    core_script_verified = False
+    if safe_relative_script:
+        resolved_script = Path(core_path) / script_path
+        try:
+            with resolved_script.open("rb") as source:
+                source.read(1)
+            core_script_verified = resolved_script.is_file() and not resolved_script.is_symlink()
+        except OSError:
+            core_script_verified = False
     compatible = (
         version == ENTRY_CORE_CONTRACT_VERSION
         and isinstance(declared_entries, dict)
         and set(declared_entries) == set(PUBLIC_ENTRIES)
+        and core_script_verified
     )
-    return version, compatible
+    return version, compatible, core_script, core_script_verified
 
 
 def verify_public_entries(inventory, invoking_entry=None):
@@ -186,7 +205,12 @@ def verify_public_entries(inventory, invoking_entry=None):
     missing_entries = [item["name"] for item in entries if not item["verified"]]
     core = next(item for item in entries if item["name"] == "grill-harness")
     core_path = core["path"] if core["verified"] else None
-    contract_version, contract_compatible = _core_contract(core_path)
+    (
+        contract_version,
+        contract_compatible,
+        core_script,
+        core_script_verified,
+    ) = _core_contract(core_path)
     incompatible_entries = [
         item["name"] for item in entries
         if item["verified"]
@@ -205,6 +229,8 @@ def verify_public_entries(inventory, invoking_entry=None):
         "contract_version": contract_version,
         "expected_contract_version": ENTRY_CORE_CONTRACT_VERSION,
         "contract_compatible": contract_compatible,
+        "core_script": core_script,
+        "core_script_verified": core_script_verified,
         "actions_performed": False,
     }
 
@@ -296,6 +322,8 @@ def run_preflight(
             "contract_version": None,
             "expected_contract_version": ENTRY_CORE_CONTRACT_VERSION,
             "contract_compatible": None,
+            "core_script": None,
+            "core_script_verified": None,
             "actions_performed": False,
         }
     entry_ready = harness_installation["entry_ready"]

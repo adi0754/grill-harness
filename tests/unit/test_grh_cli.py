@@ -33,11 +33,19 @@ def run_cli_at(cli, *arguments, env=None):
 
 
 class GrillHarnessCliTests(unittest.TestCase):
-    def _isolated_harness(self, root, entries):
+    def _isolated_harness(self, root, entries, required_capabilities=False):
         skills_root = Path(root) / "skills"
         source_root = REPO_ROOT / "skills"
         for entry in entries:
             shutil.copytree(source_root / entry, skills_root / entry)
+        if required_capabilities:
+            for capability in ("grilling", "domain-modeling", "codebase-design"):
+                path = skills_root / capability
+                path.mkdir(parents=True)
+                path.joinpath("SKILL.md").write_text(
+                    "---\nname: {}\ndescription: Use when testing.\n---\n".format(capability),
+                    encoding="utf-8",
+                )
         return skills_root, skills_root / "grill-harness" / "scripts" / "grh.py"
 
     def test_entry_check_blocks_when_public_installation_is_incomplete(self):
@@ -95,16 +103,81 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertEqual(payload["decision"]["reason_code"], "harness_contract_incompatible")
             self.assertFalse((base / "storage").exists())
 
+    def test_entry_check_blocks_mutating_entry_when_required_capabilities_are_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            _, cli = self._isolated_harness(base, entries)
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({"GRILL_HARNESS_TEST_ROOT": str(base / "storage"), "PATH": ""})
+
+            result = run_cli_at(
+                cli, "entry-check", "--entry", "grh-start", "--project", str(project),
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["decision"]["reason_code"], "missing_required_capabilities"
+            )
+            self.assertEqual(
+                payload["decision"]["missing_prerequisites"],
+                ["grilling", "domain-modeling", "codebase-design"],
+            )
+            self.assertFalse(payload["decision"]["eligible"])
+            self.assertFalse((base / "storage").exists())
+
+    def test_entry_check_allows_read_only_diagnostics_without_required_capabilities(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            _, cli = self._isolated_harness(base, entries)
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({"GRILL_HARNESS_TEST_ROOT": str(base / "storage"), "PATH": ""})
+
+            for entry in ("grill-harness", "grh-upstream-check"):
+                with self.subTest(entry=entry):
+                    result = run_cli_at(
+                        cli, "entry-check", "--entry", entry, "--project", str(project),
+                        env=env,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    payload = json.loads(result.stdout)
+                    self.assertTrue(payload["decision"]["eligible"])
+                    self.assertEqual(payload["preflight"]["missing_required"], [
+                        "grilling", "domain-modeling", "codebase-design"
+                    ])
+            self.assertFalse((base / "storage").exists())
+
     def test_entry_check_allows_start_for_not_started_project_without_writes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            _, cli = self._isolated_harness(
+                base, entries, required_capabilities=True
+            )
             root = base / "storage"
             project = base / "project"
             project.mkdir()
             env = dict(os.environ)
             env.update({"GRILL_HARNESS_TEST_ROOT": str(root), "PATH": ""})
 
-            result = run_cli(
+            result = run_cli_at(
+                cli,
                 "entry-check", "--entry", "grh-start", "--project", str(project), env=env
             )
 
@@ -164,12 +237,20 @@ class GrillHarnessCliTests(unittest.TestCase):
     def test_entry_check_review_only_scope_excludes_final_acceptance_without_mutation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            _, cli = self._isolated_harness(
+                base, entries, required_capabilities=True
+            )
             root = base / "storage"
             project = base / "project"
             project.mkdir()
             env = dict(os.environ)
             env["GRILL_HARNESS_TEST_ROOT"] = str(root)
-            initialized = run_cli(
+            initialized = run_cli_at(
+                cli,
                 "init", "--project", str(project), "--workflow-name", "检查",
                 "--created-date", "2026-07-12", env=env,
             )
@@ -177,7 +258,8 @@ class GrillHarnessCliTests(unittest.TestCase):
             before = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
             env["PATH"] = "/usr/bin:/bin"
 
-            result = run_cli(
+            result = run_cli_at(
+                cli,
                 "entry-check", "--entry", "grh-check", "--project", str(project),
                 "--workflow", str(workflow), "--requested-scope", "review", env=env,
             )

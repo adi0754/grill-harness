@@ -56,7 +56,12 @@ class PreflightTests(unittest.TestCase):
         }
 
     def _public_installation(
-        self, root, contract_version=1, metadata_names=None, entry_versions=None
+        self,
+        root,
+        contract_version=1,
+        metadata_names=None,
+        entry_versions=None,
+        create_core_script=True,
     ):
         metadata_names = metadata_names or {}
         entry_versions = entry_versions or {}
@@ -75,10 +80,15 @@ class PreflightTests(unittest.TestCase):
         contract.write_text(
             json.dumps({
                 "contract_version": contract_version,
+                "core": {"entry_check_script": "scripts/grh.py"},
                 "entries": {name: {} for name in self.PUBLIC_ENTRIES},
             }),
             encoding="utf-8",
         )
+        if create_core_script:
+            script = Path(root) / "grill-harness" / "scripts" / "grh.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
         return entries
 
     def test_complete_public_installation_is_entry_ready_without_changing_dependency_ready(self):
@@ -194,6 +204,24 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(
                 report["harness_installation"]["incompatible_entries"], ["grh-run"]
             )
+
+    def test_missing_contract_declared_core_script_blocks_entry_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = self._public_installation(root, create_core_script=False)
+            runner = FakeRunner(self._safe_cli_responses({"skills": entries}, {"skills": []}))
+
+            report = preflight.run_preflight(
+                runner=runner,
+                check_harness_entries=True,
+                invoking_entry="grh-plan",
+            )
+
+            installation = report["harness_installation"]
+            self.assertFalse(report["entry_ready"])
+            self.assertFalse(installation["contract_compatible"])
+            self.assertEqual(installation["core_script"], "scripts/grh.py")
+            self.assertFalse(installation["core_script_verified"])
 
     def test_public_entries_use_cli_success_and_filesystem_fallback_for_failed_scope(self):
         with tempfile.TemporaryDirectory() as directory:
