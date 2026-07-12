@@ -47,3 +47,11 @@
 - `state.current_project_baseline()` 成为 CLI 与事务共享的唯一 baseline provider。正式 apply 必须传入项目路径，并在原子锁区内重新计算 current baseline；workflow baseline 与最终验收 evidence baseline 缺失、布尔或不匹配时一律失败关闭。
 
 以上三项均先以独立回归测试观察 RED，再实现最小修复并观察 GREEN。
+
+## Git baseline 命令失败关闭
+
+最终复审补充要求 Git 仓库 baseline 探测不能在子命令失败时静默降级：
+
+- `state.current_project_baseline()` 对已识别 Git 项目的 `rev-parse`、`status`、`diff`、`ls-files` 任一非零退出抛出包含具体命令的 `StateContractError`。
+- provider unit test 分别 mock `status`、`diff`、`ls-files` 失败并确认 RED→GREEN。
+- knowledge apply 回归在真实临时 Git 仓库中 mock `git status` 失败，确认正式归档拒绝、长期 knowledge 文件不产生。

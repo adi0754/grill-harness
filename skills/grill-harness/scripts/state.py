@@ -682,6 +682,10 @@ def current_project_baseline(project_path, identity=None):
         text=True,
         check=False,
     )
+    if result.returncode != 0 and project_identity.is_git:
+        raise StateContractError(
+            "cannot determine current project baseline: git rev-parse failed"
+        )
     if result.returncode == 0 and result.stdout.strip():
         head = result.stdout.strip()
         status = subprocess.run(
@@ -697,12 +701,20 @@ def current_project_baseline(project_path, identity=None):
             text=True,
             check=False,
         )
-        if status.returncode == 0 and status.stdout:
+        if status.returncode != 0:
+            raise StateContractError(
+                "cannot determine current project baseline: git status failed"
+            )
+        if status.stdout:
             diff = subprocess.run(
                 ["git", "-C", str(project_root), "diff", "--binary", "HEAD"],
                 capture_output=True,
                 check=False,
             )
+            if diff.returncode != 0:
+                raise StateContractError(
+                    "cannot determine current project baseline: git diff failed"
+                )
             untracked = subprocess.run(
                 [
                     "git",
@@ -716,6 +728,10 @@ def current_project_baseline(project_path, identity=None):
                 capture_output=True,
                 check=False,
             )
+            if untracked.returncode != 0:
+                raise StateContractError(
+                    "cannot determine current project baseline: git ls-files failed"
+                )
             digest_input = bytearray(status.stdout.encode("utf-8"))
             digest_input.extend(diff.stdout)
             for raw_path in sorted(

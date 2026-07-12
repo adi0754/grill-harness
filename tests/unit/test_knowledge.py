@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -709,6 +710,68 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                                 approval_id="DEC-900",
                                 project_path=self.project_path,
                             )
+
+    def test_formal_apply_rejects_archive_when_git_status_command_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "git-product"
+            project.mkdir()
+            subprocess.run(["git", "init", "-q", str(project)], check=True)
+            subprocess.run(
+                ["git", "-C", str(project), "config", "user.name", "Tests"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(project), "config", "user.email", "tests@example.com"],
+                check=True,
+            )
+            (project / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(project), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(project), "commit", "-qm", "init"], check=True)
+            baseline = subprocess.run(
+                ["git", "-C", str(project), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            workflow = self.workflow(root)
+            state_path = workflow / "系统" / "state.yaml"
+            payload = common.read_yaml(state_path)
+            payload["git_baseline"] = baseline
+            payload["evidence"][0]["baseline"] = baseline
+            common.atomic_write_yaml(state_path, payload)
+            common.atomic_write_yaml(
+                workflow / "系统" / "evidence.yaml",
+                {"schema_version": 1, "workflow_version": 1, "evidence": payload["evidence"]},
+            )
+            original_run = state.subprocess.run
+
+            def fail_status(command, *args, **kwargs):
+                if "status" in command:
+                    return subprocess.CompletedProcess(
+                        command, 2, stdout="", stderr="simulated status failure"
+                    )
+                return original_run(command, *args, **kwargs)
+
+            with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
+                preview = knowledge.promote_project_knowledge(
+                    workflow, "project-a", [self.record()]
+                )
+                self.approve_preview(workflow, preview, "DEC-900", "knowledge_archive")
+                with mock.patch.object(state.subprocess, "run", side_effect=fail_status):
+                    with self.assertRaisesRegex(
+                        ValueError, "cannot determine current project baseline.*status"
+                    ):
+                        knowledge.promote_project_knowledge(
+                            workflow,
+                            "project-a",
+                            preview=preview["path"],
+                            approval_id="DEC-900",
+                            project_path=project,
+                        )
+
+            self.assertFalse(
+                (root / "知识库" / "项目知识" / "project-a" / "knowledge.yaml").exists()
+            )
 
 
 if __name__ == "__main__":

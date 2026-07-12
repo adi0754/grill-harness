@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "skills" / "grill-harness" / "scripts"
@@ -303,6 +304,38 @@ class ProjectIdentityTests(unittest.TestCase):
         self.assertEqual(default_port, "example.com/Org/Repo")
         self.assertEqual(non_default_port, "example.com:2222/Org/Repo")
         self.assertNotEqual(default_port, non_default_port)
+
+    def test_current_git_baseline_fails_closed_when_a_required_git_command_fails(self):
+        identity = state.ProjectIdentity(
+            project_id="project-123",
+            directory_name="project-project",
+            normalized_path="/repo",
+            is_git=True,
+            normalized_remote=None,
+            history_roots=("root",),
+            relocation_candidates=(),
+        )
+        success_head = mock.Mock(returncode=0, stdout="abc123\n", stderr="")
+        dirty_status = mock.Mock(
+            returncode=0, stdout=" M tracked.py\n?? new.py\n", stderr=""
+        )
+        success_bytes = mock.Mock(returncode=0, stdout=b"diff", stderr=b"")
+        success_paths = mock.Mock(returncode=0, stdout=b"new.py\0", stderr=b"")
+        failure_text = mock.Mock(returncode=2, stdout="", stderr="status failed")
+        failure_bytes = mock.Mock(returncode=2, stdout=b"", stderr=b"command failed")
+        cases = (
+            ("status", [success_head, failure_text]),
+            ("diff", [success_head, dirty_status, failure_bytes, success_paths]),
+            ("ls-files", [success_head, dirty_status, success_bytes, failure_bytes]),
+        )
+        for command, results in cases:
+            with self.subTest(command=command):
+                with mock.patch.object(state.subprocess, "run", side_effect=results):
+                    with self.assertRaisesRegex(
+                        state.StateContractError,
+                        "cannot determine current project baseline.*{}".format(command),
+                    ):
+                        state.current_project_baseline("/repo", identity)
 
 
 if __name__ == "__main__":
