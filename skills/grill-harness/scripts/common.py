@@ -21,6 +21,7 @@ STORAGE_DIRECTORIES = {
     "config": "配置",
     "upstream": "上游管理",
     "projects": "项目",
+    "knowledge": "知识库",
     "templates": "模板",
     "logs": "日志",
 }
@@ -58,6 +59,20 @@ def ensure_storage_layout(root: Optional[Path] = None) -> Dict[str, Path]:
 
 
 initialize_storage = ensure_storage_layout
+
+
+def ensure_knowledge_layout(root: Optional[Path] = None) -> Dict[str, Path]:
+    """Create the durable project/general knowledge categories for a write."""
+
+    storage_root = resolve_storage_root() if root is None else Path(root).expanduser().resolve()
+    knowledge_root = storage_root / STORAGE_DIRECTORIES["knowledge"]
+    paths = {
+        "projects": knowledge_root / "项目知识",
+        "general": knowledge_root / "通用知识",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return paths
 
 
 def ensure_project_layout(project_directory: Path) -> Dict[str, Path]:
@@ -248,6 +263,7 @@ __all__ = [
     "backup_file",
     "ensure_storage_layout",
     "ensure_project_layout",
+    "ensure_knowledge_layout",
     "exclusive_directory_lock",
     "get_storage_root",
     "initialize_storage",

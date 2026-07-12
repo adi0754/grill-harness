@@ -1,10 +1,13 @@
 """Guarded workflow mutations for records, gates, and phase transitions."""
 
+import copy
+import hashlib
 import json
 import os
 import shutil
 import tempfile
 import uuid
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -143,7 +146,7 @@ def _validate_task_contract(record, workflow_root):
         raise ValueError("task startup prompt file does not exist")
 
 
-def _write(state_path, workflow, manifests):
+def _write(state_path, workflow, manifests, extra_payloads=None):
     system = state_path.parent
     ledger_path = state_path.parent.parent / "核心文档" / "决策账本.yaml"
     targets = {"state": state_path}
@@ -156,6 +159,17 @@ def _write(state_path, workflow, manifests):
     if "ledger" in workflow:
         targets["ledger"] = ledger_path
         payloads["ledger"] = {"records": workflow["ledger"]}
+    for key, item in (extra_payloads or {}).items():
+        if key in targets or not isinstance(item, tuple) or len(item) != 2:
+            raise ValueError("invalid extra workflow transaction target: {}".format(key))
+        target, payload = item
+        target = Path(target).expanduser().resolve()
+        try:
+            target.relative_to(common.resolve_storage_root())
+        except ValueError:
+            raise ValueError("extra workflow transaction target must stay under storage")
+        targets[key] = target
+        payloads[key] = payload
     backup_directory = system / "事务备份" / uuid.uuid4().hex
     backup_directory.mkdir(parents=True, exist_ok=False)
     backups = {}
@@ -186,10 +200,10 @@ def _write(state_path, workflow, manifests):
             for key, target in targets.items():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(str(temporary_paths[key]), str(target))
+            journal_path.unlink(missing_ok=True)
         except OSError:
             _recover_interrupted_write(state_path)
             raise
-        journal_path.unlink(missing_ok=True)
     finally:
         shutil.rmtree(str(temporary), ignore_errors=True)
 
@@ -389,6 +403,229 @@ def transition_phase(
     return {"phase": phase_id, "status": target, "workflow_path": str(state_path)}
 
 
+def _approved_preview_decision(workflow, approval_id, gate, preview_id):
+    latest = None
+    for record in workflow.get("ledger", ()):
+        if isinstance(record, dict) and record.get("id") == approval_id:
+            latest = record
+    return (
+        isinstance(latest, dict)
+        and latest.get("status") == "approved"
+        and latest.get("approved_by") == "user"
+        and latest.get("gate") == gate
+        and latest.get("preview_id") == preview_id
+    )
+
+
+def commit_knowledge_update(
+    workflow_value,
+    knowledge_path,
+    knowledge_payload,
+    *,
+    preview_id,
+    approval_requirements,
+    artifact_ids=(),
+    complete_archive=False,
+    route_failure=False,
+    evidence_ids=(),
+    expected_store_hash=None,
+    source_project_path=None,
+    expected_source_hash=None,
+):
+    """Atomically commit a knowledge store with its guarded workflow facts."""
+
+    state_path = _state_path(workflow_value)
+    destination = Path(knowledge_path).expanduser().resolve()
+    try:
+        destination.relative_to(common.resolve_storage_root())
+    except ValueError:
+        raise ValueError("knowledge store must stay under ~/.grill-harness")
+    if not isinstance(knowledge_payload, dict):
+        raise ValueError("knowledge payload must be a mapping")
+    requirements = list(approval_requirements)
+    if not requirements:
+        raise ValueError("knowledge commit requires a persisted user approval")
+    knowledge_lock = destination.parent / ".knowledge.lock"
+    workflow_lock = state_path.parent / ".workflow.lock"
+    source = (
+        Path(source_project_path).expanduser().resolve()
+        if source_project_path is not None
+        else None
+    )
+    lock_paths = {knowledge_lock, workflow_lock}
+    if source is not None:
+        try:
+            source.relative_to(common.resolve_storage_root())
+        except ValueError:
+            raise ValueError("project knowledge source must stay under storage")
+        lock_paths.add(source.parent / ".knowledge.lock")
+    with ExitStack() as stack:
+        for lock_path in sorted(lock_paths, key=lambda item: str(item)):
+            stack.enter_context(common.exclusive_directory_lock(lock_path))
+        current_hash = hashlib.sha256(
+            destination.read_bytes() if destination.is_file() else b"<missing>"
+        ).hexdigest()
+        if expected_store_hash is not None and current_hash != expected_store_hash:
+            raise ValueError("knowledge store changed after preview; create a new preview")
+        if source is not None:
+            source_hash = hashlib.sha256(
+                source.read_bytes() if source.is_file() else b"<missing>"
+            ).hexdigest()
+            if source_hash != expected_source_hash:
+                raise ValueError("project knowledge source changed after preview")
+        workflow, manifests = _load(state_path)
+        state.validate_ledger(workflow.get("ledger", ()))
+        for requirement in requirements:
+            if len(requirement) == 2:
+                approval_id, gate = requirement
+                bound_preview_id = preview_id
+            elif len(requirement) == 3:
+                approval_id, gate, bound_preview_id = requirement
+            else:
+                raise ValueError("invalid knowledge approval requirement")
+            if not _approved_preview_decision(
+                workflow, approval_id, gate, bound_preview_id
+            ):
+                raise ValueError(
+                    "knowledge preview requires a user-approved {} decision bound to {}".format(
+                        gate, bound_preview_id
+                    )
+                )
+        updated = copy.deepcopy(workflow)
+        if route_failure:
+            evidence_index = {
+                item.get("id"): item
+                for item in workflow.get("evidence", ())
+                if isinstance(item, dict)
+            }
+            if not evidence_ids:
+                raise ValueError("route failure requires objective workflow evidence")
+            for evidence_id in evidence_ids:
+                evidence = evidence_index.get(evidence_id)
+                if not (
+                    isinstance(evidence, dict)
+                    and evidence.get("status") in {"valid", "completed"}
+                    and (
+                        evidence.get("current") is True
+                        or evidence.get("currentness") == "current"
+                    )
+                    and evidence.get("failure_class") == "route_failure"
+                    and evidence.get("workflow_id") == workflow.get("workflow_id")
+                ):
+                    raise ValueError(
+                        "route failure evidence must be current, owned, and classification-specific: {}".format(
+                            evidence_id
+                        )
+                    )
+        elif complete_archive:
+            archive_approval = requirements[0][0]
+            updated["archive_confirmation"] = {
+                "status": "approved",
+                "approval_id": archive_approval,
+                "preview_id": preview_id,
+            }
+            missing = state.knowledge_archive_prerequisites(updated)
+            if missing:
+                raise ValueError(
+                    "knowledge archive missing current prerequisites: {}".format(
+                        ", ".join(missing)
+                    )
+                )
+            promoted_ids = list(artifact_ids)
+            if not promoted_ids:
+                raise ValueError("knowledge archive requires at least one promoted record")
+            acceptance_ids = [
+                item["id"]
+                for item in updated.get("evidence", ())
+                if isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and item.get("kind") == "final_acceptance"
+                and item.get("result") == "accepted"
+                and (item.get("current") is True or item.get("currentness") == "current")
+            ]
+            artifacts = copy.deepcopy(updated.get("artifacts", []))
+            artifact_index = {
+                item.get("id") for item in artifacts if isinstance(item, dict)
+            }
+            for record_id in promoted_ids:
+                if record_id not in artifact_index:
+                    artifacts.append({
+                        "id": record_id,
+                        "kind": "knowledge-record",
+                        "version": 1,
+                        "status": "completed",
+                        "currentness": "current",
+                        "path": str(destination),
+                    })
+            phases = copy.deepcopy(updated.get("phases", []))
+            phase_ids = {
+                item.get("id") for item in phases if isinstance(item, dict)
+            }
+            if phase_ids.issuperset(state.WORKFLOW_PHASES):
+                archive_index = state.WORKFLOW_PHASES.index("knowledge_archive")
+                incomplete = [
+                    item.get("id")
+                    for item in phases
+                    if isinstance(item, dict)
+                    and item.get("id") in state.WORKFLOW_PHASES[:archive_index]
+                    and item.get("status") not in {"completed", "skipped"}
+                ]
+                if incomplete:
+                    raise ValueError(
+                        "previous phases must complete before knowledge_archive: {}".format(
+                            ", ".join(incomplete)
+                        )
+                    )
+            found = False
+            for index, phase in enumerate(phases):
+                if not isinstance(phase, dict) or phase.get("id") != "knowledge_archive":
+                    continue
+                found = True
+                current_phase = phase
+                if current_phase.get("status") == "pending":
+                    current_phase = state.transition_state(
+                        current_phase, "in_progress", gates=updated.get("gates", {})
+                    )
+                if current_phase.get("status") != "in_progress":
+                    raise ValueError("knowledge_archive must be pending or in_progress")
+                current_phase = dict(
+                    current_phase,
+                    artifacts=promoted_ids,
+                    evidence=acceptance_ids,
+                )
+                phases[index] = state.transition_state(
+                    current_phase, "completed", gates=updated.get("gates", {})
+                )
+                break
+            if not found:
+                raise ValueError("workflow knowledge_archive phase is missing")
+            updated["artifacts"] = artifacts
+            updated["phases"] = phases
+        else:
+            archive_phase = next(
+                (
+                    item for item in updated.get("phases", ())
+                    if isinstance(item, dict) and item.get("id") == "knowledge_archive"
+                ),
+                None,
+            )
+            if not isinstance(archive_phase, dict) or archive_phase.get("status") != "completed":
+                raise ValueError("general knowledge requires completed project knowledge archive")
+            general_approval = requirements[-1][0]
+            updated["general_knowledge_confirmation"] = {
+                "status": "approved",
+                "approval_id": general_approval,
+                "preview_id": preview_id,
+            }
+        _write(
+            state_path,
+            updated,
+            manifests,
+            extra_payloads={"knowledge": (destination, knowledge_payload)},
+        )
+    return {"workflow_path": str(state_path), "knowledge_path": str(destination)}
+
+
 def transition_task(
     workflow_value,
     task_id,
@@ -491,6 +728,7 @@ def parse_artifact_versions(values):
 __all__ = [
     "approve_gate",
     "parse_artifact_versions",
+    "commit_knowledge_update",
     "register_record",
     "transition_task",
     "transition_phase",

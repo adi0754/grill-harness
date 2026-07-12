@@ -32,6 +32,9 @@ class TemplateContractTests(unittest.TestCase):
         "问题与发现.yaml",
         "相似实现对照.md",
         "需求调查任务.md",
+        "知识条目.yaml",
+        "学习草稿.md",
+        "知识变更预览.md",
     }
 
     def read(self, name):
@@ -156,6 +159,32 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("Spec", review)
         self.assertIn("完整文件", review)
         self.assertIn("真实 diff", review)
+
+    def test_knowledge_templates_capture_boundaries_evidence_and_explicit_promotion(self):
+        record = self.load_json_yaml("知识条目.yaml")
+        self.assertEqual(record["id"], "KNW-001")
+        for field in (
+            "conclusion", "type", "applicability", "non_applicability", "evidence",
+            "trust_status", "source_workflow", "formed_at", "invalidation_condition",
+            "replaced_by",
+        ):
+            self.assertIn(field, record)
+
+        draft = self.read("学习草稿.md")
+        self.assertIn("暂定", draft)
+        self.assertIn("过程产物/学习草稿", draft)
+
+        preview = self.read("知识变更预览.md")
+        for field in (
+            "preview_id", "新增", "去重", "冲突", "replaced_by", "用户批准",
+            "通用知识第二批准", "DEC-*", "knowledge-promote --preview",
+        ):
+            self.assertIn(field, preview)
+
+        experience = self.read("项目经验.md")
+        for field in ("最终目标和结果", "重要审查发现", "未解决", "可复用经验", "下次应避免"):
+            self.assertIn(field, experience)
+        self.assertIn("不保存完整对话", experience)
 
     def test_local_runtime_prompts_are_short_and_not_web_portable_templates(self):
         protocol = (REFERENCES / "角色任务协议.md").read_text(encoding="utf-8")

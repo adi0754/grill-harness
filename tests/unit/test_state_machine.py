@@ -236,6 +236,41 @@ class WorkflowStateMachineTests(unittest.TestCase):
                     "optional": False, "skip_reason": "省略",
                 }
             )
+
+    def test_knowledge_archive_prerequisites_require_current_acceptance_and_user_approval(self):
+        workflow = {
+            "phases": [{"id": "independent_assurance", "status": "completed"}],
+            "evidence": [{
+                "id": "EVD-001", "kind": "final_acceptance", "status": "completed",
+                "result": "accepted", "current": True,
+            }],
+            "archive_confirmation": {"status": "approved"},
+        }
+        self.assertEqual(state.knowledge_archive_prerequisites(workflow), [])
+
+        workflow["evidence"][0]["current"] = False
+        self.assertEqual(
+            state.knowledge_archive_prerequisites(workflow),
+            ["current_acceptance_passed"],
+        )
+
+    def test_knowledge_archive_rejects_acceptance_from_a_different_or_missing_baseline(self):
+        workflow = {
+            "git_baseline": "current-commit",
+            "phases": [{"id": "independent_assurance", "status": "completed"}],
+            "evidence": [{
+                "id": "EVD-001", "kind": "final_acceptance", "status": "valid",
+                "result": "accepted", "currentness": "current", "baseline": "old-commit",
+            }],
+            "archive_confirmation": True,
+        }
+        for baseline in ("old-commit", None):
+            with self.subTest(baseline=baseline):
+                workflow["evidence"][0]["baseline"] = baseline
+                self.assertIn(
+                    "current_acceptance_passed",
+                    state.knowledge_archive_prerequisites(workflow),
+                )
         with self.assertRaises(state.StateContractError):
             state.validate_phase(
                 {

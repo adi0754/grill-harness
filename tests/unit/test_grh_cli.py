@@ -48,6 +48,126 @@ class GrillHarnessCliTests(unittest.TestCase):
                 )
         return skills_root, skills_root / "grill-harness" / "scripts" / "grh.py"
 
+    def _knowledge_record(self, workflow_id="WF-001", **changes):
+        record = {
+            "id": "KNW-001",
+            "conclusion": "退款命令必须携带稳定幂等键",
+            "type": "project_practice",
+            "applicability": ["退款命令处理"],
+            "non_applicability": ["只读查询"],
+            "evidence": ["EVD-001"],
+            "trust_status": "tentative",
+            "source_workflow": workflow_id,
+            "formed_at": "2026-07-12T12:00:00+08:00",
+            "invalidation_condition": "退款协议移除幂等键",
+            "replaced_by": None,
+        }
+        record.update(changes)
+        return record
+
+    def test_knowledge_query_is_available_without_a_workflow_and_creates_nothing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            project = base / "project"
+            project.mkdir()
+            storage = base / "storage"
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(storage)
+
+            result = run_cli(
+                "knowledge-query", "--project", str(project), "--query", "幂等", env=env
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["knowledge"]["read_only"])
+            self.assertEqual(payload["knowledge"]["records"], [])
+            self.assertFalse(storage.exists())
+
+    def test_knowledge_draft_is_protected_and_written_tentative(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            project = base / "project"
+            project.mkdir()
+            storage = base / "storage"
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(storage)
+            initialized = run_cli(
+                "init", "--project", str(project), "--workflow-name", "知识草稿",
+                "--created-date", "2026-07-12", env=env,
+            )
+            payload = json.loads(initialized.stdout)
+            record_path = base / "knowledge.yaml"
+            record_path.write_text(
+                json.dumps(self._knowledge_record(payload["workflow_id"]), ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            result = run_cli(
+                "knowledge-draft", "--project", str(project),
+                "--workflow", payload["workflow_path"], "--record", str(record_path), env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            draft = json.loads(result.stdout)["draft"]
+            self.assertEqual(draft["record"]["trust_status"], "tentative")
+            self.assertIn("过程产物/学习草稿", draft["path"])
+
+    def test_knowledge_promote_fails_closed_before_acceptance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            project = base / "project"
+            project.mkdir()
+            storage = base / "storage"
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(storage)
+            initialized = run_cli(
+                "init", "--project", str(project), "--workflow-name", "知识归档",
+                "--created-date", "2026-07-12", env=env,
+            )
+            payload = json.loads(initialized.stdout)
+            record_path = base / "knowledge.yaml"
+            record_path.write_text(
+                json.dumps(self._knowledge_record(payload["workflow_id"]), ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            preview_result = run_cli(
+                "knowledge-promote", "--project", str(project),
+                "--workflow", payload["workflow_path"], "--record", str(record_path),
+                "--scope", "project", env=env,
+            )
+
+            self.assertEqual(
+                preview_result.returncode, 0, preview_result.stdout + preview_result.stderr
+            )
+            preview = json.loads(preview_result.stdout)["promotion"]
+            self.assertFalse(preview["applied"])
+            self.assertEqual(list((storage / "知识库" / "项目知识").rglob("knowledge.yaml")), [])
+            state_path = Path(payload["workflow_path"]) / "系统" / "state.yaml"
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            state_payload["ledger"].append({
+                "id": "DEC-900",
+                "type": "DEC",
+                "version": 1,
+                "status": "approved",
+                "approved_by": "user",
+                "gate": "knowledge_archive",
+                "preview_id": preview["preview_id"],
+            })
+            state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+
+            result = run_cli(
+                "knowledge-promote", "--project", str(project),
+                "--workflow", payload["workflow_path"], "--preview", preview["path"],
+                "--scope", "project", "--approval-id", "DEC-900", env=env,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            error = json.loads(result.stdout)["error"]["message"]
+            self.assertIn("acceptance", error)
+            self.assertEqual(list((storage / "知识库" / "项目知识").rglob("knowledge.yaml")), [])
+
     def test_entry_check_blocks_when_public_installation_is_incomplete(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)

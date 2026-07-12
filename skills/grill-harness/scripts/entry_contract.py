@@ -4,6 +4,8 @@ import copy
 import json
 from pathlib import Path
 
+import state
+
 
 ENTRY_CORE_CONTRACT_VERSION = 1
 _CONTRACT_PATH = Path(__file__).resolve().parent.parent / "references" / "入口内核契约.json"
@@ -74,37 +76,7 @@ def _phase_recommendation(phase):
 
 
 def _learn_archive_prerequisites(workflow):
-    phases = workflow.get("phases", [])
-    evidence = workflow.get("evidence", [])
-    confirmation = workflow.get("archive_confirmation")
-    if not isinstance(phases, list) or not isinstance(evidence, list):
-        raise ValueError("workflow phases and evidence must be lists")
-    assurance_complete = any(
-        isinstance(item, dict)
-        and item.get("id") == "independent_assurance"
-        and item.get("status") == "completed"
-        for item in phases
-    )
-    acceptance_passed = any(
-        isinstance(item, dict)
-        and item.get("kind") == "final_acceptance"
-        and item.get("status") == "completed"
-        and item.get("result") == "accepted"
-        and item.get("current") is True
-        for item in evidence
-    )
-    archive_confirmed = confirmation is True or (
-        isinstance(confirmation, dict)
-        and confirmation.get("status") in {"approved", "confirmed"}
-    )
-    missing = []
-    if not assurance_complete:
-        missing.append("independent_assurance_completed")
-    if not acceptance_passed:
-        missing.append("current_acceptance_passed")
-    if not archive_confirmed:
-        missing.append("archive_confirmed")
-    return missing
+    return state.knowledge_archive_prerequisites(workflow)
 
 
 def evaluate_entry_request(entry_name, workflow, reconciliation, requested_scope=()):

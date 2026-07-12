@@ -15,6 +15,7 @@ from pathlib import Path
 
 import common
 import entry_contract
+import knowledge
 import migration
 import preflight
 import state
@@ -952,6 +953,91 @@ def _task_transition(args):
     }
 
 
+def _authorize_knowledge_mutation(args, operation):
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
+    workflow_path = _workflow_file(args.workflow)
+    workflow = _read_mapping(workflow_path, "workflow state")
+    if workflow.get("project_id") != identity.project_id:
+        raise ValueError("project does not own the selected workflow")
+    _, status_report = _status(args)
+    decision = entry_contract.evaluate_entry_request(
+        "grh-learn",
+        status_report,
+        status_report["reconciliation"],
+        requested_scope=(operation,),
+    )
+    if not decision["eligible"] or operation not in decision["allowed_scope"]:
+        missing = ", ".join(decision["missing_prerequisites"]) or decision["reason_code"]
+        raise ValueError(
+            "grh-learn operation {} is not allowed; missing prerequisites: {}".format(
+                operation, missing
+            )
+        )
+    return identity, workflow_path
+
+
+def _knowledge_query(args):
+    identity = state.identify_project(Path(args.project))
+    report = knowledge.query_knowledge(
+        identity.project_id,
+        args.query,
+        include_general=not args.project_only,
+    )
+    return 0, {
+        "ok": True,
+        "command": "knowledge-query",
+        "project": _project_payload(identity),
+        "knowledge": report,
+    }
+
+
+def _knowledge_draft(args):
+    identity, workflow_path = _authorize_knowledge_mutation(args, "retrospective")
+    record = _read_mapping(Path(args.record).expanduser().resolve(), "knowledge record")
+    report = knowledge.write_learning_draft(workflow_path, record)
+    return 0, {
+        "ok": True,
+        "command": "knowledge-draft",
+        "project": _project_payload(identity),
+        "draft": report,
+    }
+
+
+def _knowledge_promote(args):
+    identity, workflow_path = _authorize_knowledge_mutation(args, "retrospective")
+    records = [
+        _read_mapping(Path(path).expanduser().resolve(), "knowledge record")
+        for path in (args.record or ())
+    ]
+    if args.scope == "general":
+        report = knowledge.promote_general_knowledge(
+            workflow_path,
+            identity.project_id,
+            records if args.preview is None else None,
+            preview=args.preview,
+            approval_id=args.approval_id,
+            general_approval_id=args.general_approval_id,
+        )
+    else:
+        report = knowledge.promote_project_knowledge(
+            workflow_path,
+            identity.project_id,
+            records if args.preview is None else None,
+            preview=args.preview,
+            approval_id=args.approval_id,
+            route_failure=args.route_failure,
+            failure_approval_id=args.failure_approval_id,
+        )
+    return 0, {
+        "ok": True,
+        "command": "knowledge-promote",
+        "project": _project_payload(identity),
+        "promotion": report,
+    }
+
+
 def _parser():
     parser = MachineJsonArgumentParser(prog="grh.py")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1035,6 +1121,30 @@ def _parser():
     task_transition.add_argument("--evidence", action="append")
     task_transition.add_argument("--project", required=True)
     task_transition.set_defaults(handler=_task_transition)
+
+    knowledge_query = commands.add_parser("knowledge-query")
+    knowledge_query.add_argument("--project", required=True)
+    knowledge_query.add_argument("--query", action="append", default=[])
+    knowledge_query.add_argument("--project-only", action="store_true")
+    knowledge_query.set_defaults(handler=_knowledge_query)
+
+    knowledge_draft = commands.add_parser("knowledge-draft")
+    knowledge_draft.add_argument("--project", required=True)
+    knowledge_draft.add_argument("--workflow", required=True)
+    knowledge_draft.add_argument("--record", required=True)
+    knowledge_draft.set_defaults(handler=_knowledge_draft)
+
+    knowledge_promote = commands.add_parser("knowledge-promote")
+    knowledge_promote.add_argument("--project", required=True)
+    knowledge_promote.add_argument("--workflow", required=True)
+    knowledge_promote.add_argument("--record", action="append")
+    knowledge_promote.add_argument("--preview")
+    knowledge_promote.add_argument("--scope", choices=("project", "general"), default="project")
+    knowledge_promote.add_argument("--approval-id")
+    knowledge_promote.add_argument("--general-approval-id")
+    knowledge_promote.add_argument("--route-failure", action="store_true")
+    knowledge_promote.add_argument("--failure-approval-id")
+    knowledge_promote.set_defaults(handler=_knowledge_promote)
     return parser
 
 

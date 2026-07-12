@@ -256,6 +256,51 @@ def validate_phase(phase: Mapping[str, Any]) -> None:
             raise StateContractError("skipped phase requires a reason")
 
 
+def knowledge_archive_prerequisites(workflow: Mapping[str, Any]) -> list:
+    """Return missing facts for durable knowledge archival without mutation."""
+
+    if not isinstance(workflow, Mapping):
+        raise StateContractError("workflow must be a mapping")
+    phases = workflow.get("phases", [])
+    evidence = workflow.get("evidence", [])
+    if not isinstance(phases, list) or not isinstance(evidence, list):
+        raise StateContractError("workflow phases and evidence must be lists")
+    assurance_complete = any(
+        isinstance(item, Mapping)
+        and item.get("id") == "independent_assurance"
+        and item.get("status") == "completed"
+        for item in phases
+    )
+    acceptance_passed = any(
+        isinstance(item, Mapping)
+        and item.get("kind") == "final_acceptance"
+        and item.get("status") in {"completed", "valid"}
+        and item.get("result") == "accepted"
+        and (
+            item.get("current") is True
+            or item.get("currentness") == "current"
+        )
+        and (
+            not isinstance(workflow.get("git_baseline"), str)
+            or item.get("baseline") == workflow.get("git_baseline")
+        )
+        for item in evidence
+    )
+    confirmation = workflow.get("archive_confirmation")
+    archive_confirmed = confirmation is True or (
+        isinstance(confirmation, Mapping)
+        and confirmation.get("status") in {"approved", "confirmed"}
+    )
+    missing = []
+    if not assurance_complete:
+        missing.append("independent_assurance_completed")
+    if not acceptance_passed:
+        missing.append("current_acceptance_passed")
+    if not archive_confirmed:
+        missing.append("archive_confirmed")
+    return missing
+
+
 def _validate_id_sequence(value: Any, field_name: str) -> None:
     if (
         not isinstance(value, Sequence)
@@ -662,6 +707,7 @@ __all__ = [
     "normalize_git_remote",
     "normalize_project_path",
     "next_state",
+    "knowledge_archive_prerequisites",
     "project_fingerprint",
     "project_id",
     "revise_ledger_record",

@@ -37,14 +37,29 @@ class StorageRootTests(unittest.TestCase):
 
             self.assertEqual(
                 set(paths),
-                {"config", "upstream", "projects", "templates", "logs"},
+                {"config", "upstream", "projects", "knowledge", "templates", "logs"},
             )
             self.assertEqual(
                 {path.name for path in paths.values()},
-                {"配置", "上游管理", "项目", "模板", "日志"},
+                {"配置", "上游管理", "项目", "知识库", "模板", "日志"},
             )
             self.assertTrue(all(path.is_dir() for path in paths.values()))
             self.assertFalse((Path(test_root) / "工作流").exists())
+
+    def test_knowledge_categories_are_initialized_only_by_a_mutating_knowledge_operation(self):
+        with tempfile.TemporaryDirectory() as test_root:
+            root = Path(test_root)
+
+            paths = common.ensure_knowledge_layout(root)
+
+            self.assertEqual(
+                paths,
+                {
+                    "projects": root.resolve() / "知识库" / "项目知识",
+                    "general": root.resolve() / "知识库" / "通用知识",
+                },
+            )
+            self.assertTrue(all(path.is_dir() for path in paths.values()))
 
     def test_workflow_directory_is_created_inside_a_project(self):
         with tempfile.TemporaryDirectory() as test_root:

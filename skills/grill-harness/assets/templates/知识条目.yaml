@@ -1,0 +1,13 @@
+{
+  "id": "KNW-001",
+  "conclusion": "<经证据支持的结论>",
+  "type": "project_practice",
+  "applicability": ["<适用边界>"],
+  "non_applicability": ["<不适用边界>"],
+  "evidence": ["EVD-001"],
+  "trust_status": "tentative",
+  "source_workflow": "<当前工作流稳定 ID>",
+  "formed_at": "2026-07-12T12:00:00+08:00",
+  "invalidation_condition": "<何种当前事实会使结论失效>",
+  "replaced_by": null
+}
