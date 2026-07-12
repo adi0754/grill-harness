@@ -138,34 +138,14 @@ class GrillHarnessCliTests(unittest.TestCase):
                 "--scope", "project", env=env,
             )
 
+            self.assertEqual(preview_result.returncode, 2, preview_result.stdout + preview_result.stderr)
+            error = json.loads(preview_result.stdout)["error"]["message"]
+            self.assertRegex(error, "independent assurance|acceptance")
+            workflow_path = Path(payload["workflow_path"])
             self.assertEqual(
-                preview_result.returncode, 0, preview_result.stdout + preview_result.stderr
+                list((workflow_path / "过程产物" / "学习草稿").glob("知识变更预览-*.yaml")),
+                [],
             )
-            preview = json.loads(preview_result.stdout)["promotion"]
-            self.assertFalse(preview["applied"])
-            self.assertEqual(list((storage / "知识库" / "项目知识").rglob("knowledge.yaml")), [])
-            state_path = Path(payload["workflow_path"]) / "系统" / "state.yaml"
-            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
-            state_payload["ledger"].append({
-                "id": "DEC-900",
-                "type": "DEC",
-                "version": 1,
-                "status": "approved",
-                "approved_by": "user",
-                "gate": "knowledge_archive",
-                "preview_id": preview["preview_id"],
-            })
-            state_path.write_text(json.dumps(state_payload), encoding="utf-8")
-
-            result = run_cli(
-                "knowledge-promote", "--project", str(project),
-                "--workflow", payload["workflow_path"], "--preview", preview["path"],
-                "--scope", "project", "--approval-id", "DEC-900", env=env,
-            )
-
-            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-            error = json.loads(result.stdout)["error"]["message"]
-            self.assertIn("acceptance", error)
             self.assertEqual(list((storage / "知识库" / "项目知识").rglob("knowledge.yaml")), [])
 
     def test_entry_check_blocks_when_public_installation_is_incomplete(self):

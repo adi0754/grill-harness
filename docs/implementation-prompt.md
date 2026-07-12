@@ -9,9 +9,9 @@
 开始前完整阅读以下两个文件：
 
 1. 设计规格：
-   `/Users/hongting/Documents/Codex/2026-07-11/w/outputs/2026-07-11-grill-harness-design.md`
+   `<SOURCE_DESIGN>`
 2. 实施计划：
-   `/Users/hongting/Documents/Codex/2026-07-11/w/outputs/2026-07-11-grill-harness-implementation-plan.md`
+   `<SOURCE_PLAN>`
 
 设计规格是产品和行为合同，实施计划是执行顺序。若两者冲突，以设计规格为准，并在报告中记录冲突。若文件不存在或无法完整读取，停止并要求用户重新提供，不要根据本提示词猜测缺失设计。
 
@@ -27,13 +27,13 @@
 仓库规则：
 
 - 仓库名：`grill-harness`；
-- 本地仓库固定目录：`/Users/hongting/Documents/github/ADI/grill-harness`；
-- 创建前确认父目录 `/Users/hongting/Documents/github/ADI` 存在；
+- 本地仓库固定目录：`<REPO_ROOT>`；
+- 创建前确认父目录 `<REPO_PARENT>` 存在；
 - 不得把仓库创建或 clone 到其他本地目录；
 - 使用 `gh api user --jq .login` 获取当前 GitHub 用户，不硬编码 owner；
 - 默认创建私有仓库；
 - 先设置 `owner="$(gh api user --jq .login)"`，再使用 `gh repo view "$owner/grill-harness"` 检查名称是否已存在；
-- 如果远程仓库或 `/Users/hongting/Documents/github/ADI/grill-harness` 已存在，停止并报告冲突，不覆盖、不删除、不复用未知内容；
+- 如果远程仓库或 `<REPO_ROOT>` 已存在，停止并报告冲突，不覆盖、不删除、不复用未知内容；
 - 不得擅自改为公开仓库；
 - 不得创建 Release、Marketplace 条目或公开发布，除非用户另行授权。
 

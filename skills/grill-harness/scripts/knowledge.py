@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import common
+import state
 import workflow_ops
 
 
@@ -427,6 +428,7 @@ def _create_promotion_preview(
     scope,
     storage_root=None,
     route_failure=False,
+    project_path=None,
 ):
     if not isinstance(records, list) or not records:
         raise ValueError("knowledge promotion requires at least one record")
@@ -436,13 +438,44 @@ def _create_promotion_preview(
         if scope != "project":
             raise ValueError("route failure facts cannot become general knowledge")
         _route_failure_records(records)
-    elif any(
-        isinstance(item, Mapping) and item.get("type") == "route_failure"
-        for item in records
-    ):
-        if scope == "general":
-            raise ValueError("route failure facts cannot become general knowledge")
-        raise ValueError("route failure facts require the bounded project exception")
+    else:
+        if any(
+            isinstance(item, Mapping) and item.get("type") == "route_failure"
+            for item in records
+        ):
+            if scope == "general":
+                raise ValueError("route failure facts cannot become general knowledge")
+            raise ValueError("route failure facts require the bounded project exception")
+        preview_missing = [
+            item
+            for item in state.knowledge_archive_prerequisites(workflow)
+            if item != "archive_confirmed"
+        ]
+        if preview_missing:
+            raise ValueError(
+                "knowledge promotion preview missing independent assurance or current "
+                "acceptance prerequisites: {}".format(", ".join(preview_missing))
+            )
+        if project_path is None:
+            raise ValueError("knowledge promotion preview requires the current project path")
+        project_root = Path(project_path).expanduser().resolve()
+        if not project_root.is_dir():
+            raise ValueError("knowledge promotion preview current project path does not exist")
+        project_identity = state.identify_project(project_root)
+        current_baseline = state.current_project_baseline(project_root, project_identity)
+        current_missing = [
+            item
+            for item in state.knowledge_archive_prerequisites(
+                workflow, current_baseline=current_baseline
+            )
+            if item != "archive_confirmed"
+        ]
+        if current_missing:
+            raise ValueError(
+                "knowledge promotion preview requires current acceptance: {}".format(
+                    ", ".join(current_missing)
+                )
+            )
     source_path = None
     source_hash = None
     if scope == "general":
@@ -550,6 +583,7 @@ def promote_project_knowledge(
             scope="project",
             storage_root=storage_root,
             route_failure=route_failure,
+            project_path=project_path,
         )
     state_path, _, _, payload = _load_promotion_preview(
         workflow_value, project_id, preview, "project"
@@ -621,6 +655,7 @@ def promote_general_knowledge(
     preview=None,
     approval_id=None,
     general_approval_id=None,
+    project_path=None,
 ):
     """Create a general preview from verified project knowledge, then apply it."""
 
@@ -631,6 +666,7 @@ def promote_general_knowledge(
             records,
             scope="general",
             storage_root=storage_root,
+            project_path=project_path,
         )
     state_path, workflow, _, payload = _load_promotion_preview(
         workflow_value, project_id, preview, "general"

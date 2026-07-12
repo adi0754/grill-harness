@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -107,6 +108,25 @@ class KnowledgeLifecycleTests(unittest.TestCase):
         )
         return workflow
 
+    def git_workflow(self, root):
+        project = Path(root) / "product"
+        project.mkdir()
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        subprocess.run(["git", "-C", str(project), "config", "user.name", "Tests"], check=True)
+        subprocess.run(
+            ["git", "-C", str(project), "config", "user.email", "tests@example.com"],
+            check=True,
+        )
+        (project / "README.md").write_text("initial\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(project), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(project), "commit", "-qm", "initial"], check=True)
+        return self.workflow(root)
+
+    def advance_project_baseline(self):
+        (self.project_path / "README.md").write_text("changed\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.project_path), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(self.project_path), "commit", "-qm", "changed"], check=True)
+
     def approve_preview(self, workflow, preview, approval_id, gate):
         state_path = workflow / "系统" / "state.yaml"
         payload = common.read_yaml(state_path)
@@ -205,21 +225,133 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             root = Path(temp_dir)
             workflow = self.workflow(root, accepted=False)
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
-                preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [self.record()]
-                )
-                self.approve_preview(workflow, preview, "DEC-900", "knowledge_archive")
                 with self.assertRaisesRegex(ValueError, "independent assurance|acceptance"):
                     knowledge.promote_project_knowledge(
-                        workflow,
-                        "project-a",
-                        preview=preview["path"],
-                        approval_id="DEC-900",
-                        project_path=self.project_path,
+                        workflow, "project-a", [self.record()]
                     )
+            self.assertEqual(list((workflow / "过程产物" / "学习草稿").glob("知识变更预览-*.yaml")), [])
             self.assertFalse(
                 (root / "知识库" / "项目知识" / "project-a" / "knowledge.yaml").exists()
             )
+
+    def test_promotion_preview_requires_the_current_project_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = self.workflow(root)
+            with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
+                with self.assertRaisesRegex(ValueError, "current project path"):
+                    knowledge.promote_project_knowledge(
+                        workflow, "project-a", [self.record()]
+                    )
+            self.assertEqual(
+                list((workflow / "过程产物" / "学习草稿").glob("知识变更预览-*.yaml")),
+                [],
+            )
+
+    def test_project_preview_rejects_a_stale_acceptance_baseline_without_writing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = self.git_workflow(root)
+            self.advance_project_baseline()
+            with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
+                with self.assertRaisesRegex(ValueError, "current acceptance"):
+                    knowledge.promote_project_knowledge(
+                        workflow,
+                        "project-a",
+                        [self.record()],
+                        project_path=self.project_path,
+                    )
+            self.assertEqual(
+                list((workflow / "过程产物" / "学习草稿").glob("知识变更预览-*.yaml")),
+                [],
+            )
+
+    def test_general_preview_rejects_a_stale_acceptance_baseline_without_writing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = self.git_workflow(root)
+            candidate = self.record(trust_status="verified")
+            common.atomic_write_yaml(
+                root / "知识库" / "项目知识" / "project-a" / "knowledge.yaml",
+                {"schema_version": 1, "records": [candidate]},
+            )
+            self.advance_project_baseline()
+            with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
+                with self.assertRaisesRegex(ValueError, "current acceptance"):
+                    knowledge.promote_general_knowledge(
+                        workflow,
+                        "project-a",
+                        [candidate],
+                        project_path=self.project_path,
+                    )
+            self.assertEqual(
+                list((workflow / "过程产物" / "学习草稿").glob("知识变更预览-*.yaml")),
+                [],
+            )
+
+    def test_project_preview_rejects_a_dirty_baseline_without_writing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow = self.git_workflow(root)
+            (self.project_path / "README.md").write_text("dirty\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
+                with self.assertRaisesRegex(ValueError, "current acceptance"):
+                    knowledge.promote_project_knowledge(
+                        workflow,
+                        "project-a",
+                        [self.record()],
+                        project_path=self.project_path,
+                    )
+            self.assertEqual(
+                list((workflow / "过程产物" / "学习草稿").glob("知识变更预览-*.yaml")),
+                [],
+            )
+
+    def test_project_preview_fails_closed_when_git_baseline_commands_fail(self):
+        for failed_command in ("status", "diff", "ls-files"):
+            with self.subTest(failed_command=failed_command):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    workflow = self.git_workflow(root)
+                    if failed_command == "diff":
+                        (self.project_path / "README.md").write_text("dirty\n", encoding="utf-8")
+                    elif failed_command == "ls-files":
+                        (self.project_path / "untracked.txt").write_text("new\n", encoding="utf-8")
+                    original_run = state.subprocess.run
+
+                    def fail_selected(command, *args, **kwargs):
+                        if failed_command in command:
+                            return subprocess.CompletedProcess(
+                                command, 2, stdout="", stderr="simulated failure"
+                            )
+                        return original_run(command, *args, **kwargs)
+
+                    with mock.patch.dict(
+                        os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}
+                    ):
+                        with mock.patch.object(
+                            state.subprocess, "run", side_effect=fail_selected
+                        ):
+                            with self.assertRaisesRegex(
+                                ValueError,
+                                "cannot determine current project baseline.*{}".format(
+                                    re.escape(failed_command)
+                                ),
+                            ):
+                                knowledge.promote_project_knowledge(
+                                    workflow,
+                                    "project-a",
+                                    [self.record()],
+                                    project_path=self.project_path,
+                                )
+                    self.assertEqual(
+                        list(
+                            (workflow / "过程产物" / "学习草稿").glob(
+                                "知识变更预览-*.yaml"
+                            )
+                        ),
+                        [],
+                    )
 
     def test_project_promotion_preserves_conflicts_with_replaced_by_and_completes_archive(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -235,7 +367,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             )
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [replacement]
+                    workflow, "project-a", [replacement], project_path=self.project_path
                 )
                 before_apply = path.read_bytes()
                 self.approve_preview(workflow, preview, "DEC-900", "knowledge_archive")
@@ -301,7 +433,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                     knowledge, "_load_records", side_effect=load_then_concurrently_change
                 ):
                     preview = knowledge.promote_project_knowledge(
-                        workflow, "project-a", [candidate]
+                        workflow, "project-a", [candidate], project_path=self.project_path
                     )
 
             payload = common.read_yaml(preview["path"])
@@ -332,7 +464,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             workflow = self.workflow(root)
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 project_preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [self.record()]
+                    workflow, "project-a", [self.record()], project_path=self.project_path
                 )
                 self.approve_preview(
                     workflow, project_preview, "DEC-900", "knowledge_archive"
@@ -345,7 +477,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                     project_path=self.project_path,
                 )
                 general_preview = knowledge.promote_general_knowledge(
-                    workflow, "project-a", [self.record()]
+                    workflow, "project-a", [self.record()], project_path=self.project_path
                 )
                 self.approve_preview(
                     workflow, general_preview, "DEC-901", "general_knowledge"
@@ -375,7 +507,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 with self.assertRaisesRegex(ValueError, "existing verified project"):
                     knowledge.promote_general_knowledge(
-                        workflow, "project-a", [self.record()]
+                        workflow, "project-a", [self.record()], project_path=self.project_path
                     )
 
     def test_general_apply_rechecks_that_project_source_is_still_verified(self):
@@ -384,7 +516,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             workflow = self.workflow(root)
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 project_preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [self.record()]
+                    workflow, "project-a", [self.record()], project_path=self.project_path
                 )
                 self.approve_preview(
                     workflow, project_preview, "DEC-900", "knowledge_archive"
@@ -397,7 +529,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                     project_path=self.project_path,
                 )
                 general_preview = knowledge.promote_general_knowledge(
-                    workflow, "project-a", [self.record()]
+                    workflow, "project-a", [self.record()], project_path=self.project_path
                 )
                 self.approve_preview(
                     workflow, general_preview, "DEC-901", "general_knowledge"
@@ -430,7 +562,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [self.record()]
+                    workflow, "project-a", [self.record()], project_path=self.project_path
                 )
                 self.approve_preview(workflow, preview, "DEC-900", "knowledge_archive")
                 with mock.patch.object(common.os, "replace", side_effect=fail_state_replace):
@@ -464,7 +596,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             )
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [candidate]
+                    workflow, "project-a", [candidate], project_path=self.project_path
                 )
                 self.approve_preview(workflow, preview, "DEC-900", "knowledge_archive")
                 tracked = [
@@ -611,7 +743,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             workflow = self.workflow(root)
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [self.record()]
+                    workflow, "project-a", [self.record()], project_path=self.project_path
                 )
                 payload = common.read_yaml(preview["path"])
                 payload["knowledge_path"] = str(root / "知识库" / "attacker" / "knowledge.yaml")
@@ -695,7 +827,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                         os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}
                     ):
                         preview = knowledge.promote_project_knowledge(
-                            workflow, "project-a", [self.record()]
+                            workflow, "project-a", [self.record()], project_path=self.project_path
                         )
                         self.approve_preview(
                             workflow, preview, "DEC-900", "knowledge_archive"
@@ -766,7 +898,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {common.TEST_STORAGE_ROOT_ENV: str(root)}):
                 preview = knowledge.promote_project_knowledge(
-                    workflow, "project-a", [self.record()]
+                    workflow, "project-a", [self.record()], project_path=project
                 )
                 self.approve_preview(workflow, preview, "DEC-900", "knowledge_archive")
                 with mock.patch.object(state.subprocess, "run", side_effect=fail_status):

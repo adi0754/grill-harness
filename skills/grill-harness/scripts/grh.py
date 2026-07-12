@@ -1067,6 +1067,7 @@ def _knowledge_promote(args):
             preview=args.preview,
             approval_id=args.approval_id,
             general_approval_id=args.general_approval_id,
+            project_path=args.project,
         )
     else:
         report = knowledge.promote_project_knowledge(

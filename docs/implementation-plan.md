@@ -23,7 +23,7 @@
 - Do not automatically choose or launch formal implementer, reviewer, fixer, integrator, or verifier agents.
 - Generate local task packages and short local startup prompts; the user chooses the model and Agent.
 - Default GitHub repository visibility is private.
-- Create the local repository only at `/Users/hongting/Documents/github/ADI/grill-harness`.
+- Create the local repository only at `<REPO_ROOT>`.
 - Never overwrite an existing GitHub repository or local directory.
 
 ---
@@ -31,7 +31,7 @@
 ### Task 1: Create the repository safely and capture the baseline
 
 **Files:**
-- Create: repository root at `/Users/hongting/Documents/github/ADI/grill-harness`
+- Create: repository root at `<REPO_ROOT>`
 - Create: `docs/design.md`
 - Create: `tests/baseline/README.md`
 
@@ -41,8 +41,8 @@
 
 - [ ] Verify `gh auth status` and derive the active GitHub login with `gh api user --jq .login`.
 - [ ] Set `owner="$(gh api user --jq .login)"`, then check whether `$owner/grill-harness` already exists. If it exists, stop and report the collision; do not reuse or delete it.
-- [ ] Confirm `/Users/hongting/Documents/github/ADI` exists and `/Users/hongting/Documents/github/ADI/grill-harness` does not exist.
-- [ ] Create a private repository with GitHub CLI, clone it exactly to `/Users/hongting/Documents/github/ADI/grill-harness`, and configure `origin`.
+- [ ] Confirm `<REPO_PARENT>` exists and `<REPO_ROOT>` does not exist.
+- [ ] Create a private repository with GitHub CLI, clone it exactly to `<REPO_ROOT>`, and configure `origin`.
 - [ ] Copy the approved design specification to `docs/design.md` without changing its decisions.
 - [ ] Create at least four pressure scenarios before writing `SKILL.md`: premature coding, skipping route approval, trusting an implementer summary, and claiming completion without evidence.
 - [ ] Run those scenarios without Grill Harness using fresh Agent contexts where available. Record exact observed failures in `tests/baseline/README.md`.

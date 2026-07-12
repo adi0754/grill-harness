@@ -152,6 +152,40 @@ class RuntimeEnvironmentSafetyTests(unittest.TestCase):
 
 
 class RuntimeEvidenceSanitizationTests(unittest.TestCase):
+    def test_tracked_text_has_no_personal_paths_outside_explicit_test_fixtures(self):
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout.split(b"\0")
+        allowed = {
+            Path("skills/grill-harness/assets/templates/任务图.yaml"),
+            Path("task-9-report.md"),
+            Path("tests/unit/test_runtime_safety.py"),
+        }
+        patterns = {
+            "mac_home": re.compile(r"/Users/[A-Za-z0-9._-]+(?:/|$)"),
+            "linux_home": re.compile(r"/home/[A-Za-z0-9._-]+(?:/|$)"),
+            "root_home": re.compile(r"/root(?:/|$)"),
+        }
+        violations = []
+        for raw_path in tracked:
+            if not raw_path:
+                continue
+            relative = Path(os.fsdecode(raw_path))
+            if relative in allowed or relative.parts[:2] == ("tests", "scenarios"):
+                continue
+            path = REPO_ROOT / relative
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            for name, pattern in patterns.items():
+                if pattern.search(text):
+                    violations.append(f"{relative}:{name}")
+        self.assertEqual(violations, [])
+
     def test_sanitizer_normalizes_runtime_correlation_metadata_and_temp_root(self):
         safety = load_helper(self)
         raw = (
