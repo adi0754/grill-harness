@@ -138,6 +138,7 @@ def _manifest_conflicts(workflow_path, workflow):
         ("artifacts.yaml", "artifacts"),
         ("tasks.yaml", "tasks"),
         ("evidence.yaml", "evidence"),
+        ("failures.yaml", "failure_attempts"),
     ):
         path = system_directory / filename
         try:
@@ -145,7 +146,11 @@ def _manifest_conflicts(workflow_path, workflow):
         except (OSError, ValueError, json.JSONDecodeError) as error:
             conflicts.append(
                 {
-                    "code": "MANIFEST_DIVERGENCE",
+                    "code": (
+                        "FAILURE_MANIFEST_DIVERGENCE"
+                        if field == "failure_attempts"
+                        else "MANIFEST_DIVERGENCE"
+                    ),
                     "conflict": "{} 无法作为权威清单读取：{}".format(path, error),
                     "recovery_action": "保留 state 与清单原文件，由用户确认正确版本后再继续。",
                     "field": field,
@@ -155,12 +160,33 @@ def _manifest_conflicts(workflow_path, workflow):
         if payload.get(field) != workflow.get(field):
             conflicts.append(
                 {
-                    "code": "MANIFEST_DIVERGENCE",
+                    "code": (
+                        "FAILURE_MANIFEST_DIVERGENCE"
+                        if field == "failure_attempts"
+                        else "MANIFEST_DIVERGENCE"
+                    ),
                     "conflict": "{} 与 state.yaml 中的 {} 不一致。".format(path, field),
                     "recovery_action": "停止受影响阶段，保留两份事实并由用户确认权威版本。",
                     "field": field,
                 }
             )
+        elif field == "failure_attempts":
+            report = failure_control.validate_failure_chain(
+                workflow.get(field, ()),
+                payload,
+                ledger=workflow.get("ledger", ()),
+            )
+            if not report["valid"]:
+                conflicts.append(
+                    {
+                        "code": "FAILURE_CHAIN_BROKEN",
+                        "conflict": "失败修复链完整性校验失败：{}。".format(
+                            report["conflicts"][0]["conflict"]
+                        ),
+                        "recovery_action": "停止修复任务并先 reconcile 失败清单。",
+                        "field": field,
+                    }
+                )
     return conflicts
 
 
@@ -339,7 +365,9 @@ def _validate_existing_workflow(
                 state_path
             )
         )
-    for field in ("phases", "artifacts", "tasks", "evidence", "ledger"):
+    for field in (
+        "phases", "artifacts", "tasks", "evidence", "failure_attempts", "ledger"
+    ):
         if not isinstance(state_payload.get(field), list):
             raise ValueError("workflow state {} must be a list: {}".format(field, state_path))
     if not isinstance(state_payload.get("gates"), dict):
@@ -349,6 +377,7 @@ def _validate_existing_workflow(
         ("artifacts.yaml", "artifacts"),
         ("tasks.yaml", "tasks"),
         ("evidence.yaml", "evidence"),
+        ("failures.yaml", "failure_attempts"),
     ):
         path = system_directory / filename
         payload = _read_mapping(path, field + " manifest")
@@ -364,6 +393,12 @@ def _validate_existing_workflow(
             raise ValueError(
                 "{} manifest contradicts workflow state: {}".format(field, path)
             )
+        if field == "failure_attempts":
+            report = failure_control.validate_failure_chain(
+                state_payload[field], payload, ledger=state_payload.get("ledger", ())
+            )
+            if not report["valid"]:
+                raise ValueError(report["conflicts"][0]["conflict"])
 
 
 def _update_project_index(project_index_path, project_record):
@@ -451,12 +486,21 @@ def _initialize_workflow(
             "artifacts": [],
             "tasks": [],
             "evidence": [],
+            "failure_attempts": [],
             "ledger": [],
             "gates": {},
         },
         "artifacts.yaml": {"schema_version": 1, "workflow_version": 1, "artifacts": []},
         "tasks.yaml": {"schema_version": 1, "workflow_version": 1, "tasks": []},
         "evidence.yaml": {"schema_version": 1, "workflow_version": 1, "evidence": []},
+        "failures.yaml": {
+            "schema_version": 1,
+            "workflow_version": 1,
+            "integrity_origin": "native",
+            "count": 0,
+            "head": None,
+            "failure_attempts": [],
+        },
     }
     required_files = tuple(workflow_directory / "系统" / name for name in system_payloads)
 
@@ -922,6 +966,9 @@ def _failure_record(args):
         {
             "failure_class": args.failure_class,
             "fingerprint": args.existing_fingerprint,
+            "new_chain": args.new_chain,
+            "new_chain_approval_id": args.new_chain_approval_id,
+            "new_chain_reason": args.new_chain_reason,
             "issue_id": args.issue_id,
             "failed_acceptance": args.failed_acceptance,
             "failed_command": args.failed_command,
@@ -1132,6 +1179,9 @@ def _parser():
     )
     failure_record.add_argument("--issue-id", required=True)
     failure_record.add_argument("--existing-fingerprint")
+    failure_record.add_argument("--new-chain", action="store_true")
+    failure_record.add_argument("--new-chain-approval-id")
+    failure_record.add_argument("--new-chain-reason")
     failure_record.add_argument("--failed-acceptance", action="append", default=[])
     failure_record.add_argument("--failed-command", action="append", default=[])
     failure_record.add_argument("--evidence", action="append", default=[])

@@ -84,7 +84,7 @@ class TemplateContractTests(unittest.TestCase):
             "shared_contracts", "migrations", "generated_files", "worktree", "branch",
             "acceptance_ids", "git_baseline", "task_package_path",
             "startup_prompt_path", "output_path",
-            "review_required", "review",
+            "review_required", "review", "review_history",
         }
         self.assertTrue(required.issubset(tasks[0]))
         self.assertTrue(task_graph.validate_dag(tasks)["valid"])

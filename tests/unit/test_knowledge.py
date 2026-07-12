@@ -55,6 +55,7 @@ class KnowledgeLifecycleTests(unittest.TestCase):
             ],
             "artifacts": [],
             "tasks": [],
+            "failure_attempts": [],
             "evidence": (
                 [{
                     "id": "EVD-001",
@@ -91,6 +92,17 @@ class KnowledgeLifecycleTests(unittest.TestCase):
                 "schema_version": 1,
                 "workflow_version": 1,
                 "evidence": state_payload["evidence"],
+            },
+        )
+        common.atomic_write_yaml(
+            workflow / "系统" / "failures.yaml",
+            {
+                "schema_version": 1,
+                "workflow_version": 1,
+                "integrity_origin": "native",
+                "count": 0,
+                "head": None,
+                "failure_attempts": [],
             },
         )
         return workflow

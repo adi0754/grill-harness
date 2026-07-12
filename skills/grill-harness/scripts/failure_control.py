@@ -1,5 +1,6 @@
 """Deterministic failure classification and review-convergence policy."""
 
+import copy
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -88,6 +89,81 @@ def issue_fingerprint(
     return "FAIL-{}".format(digest[:16])
 
 
+def failure_chain_key(facts):
+    """Return the stable non-baseline identity used to find an existing chain."""
+
+    if not isinstance(facts, Mapping):
+        raise ValueError("failure chain facts must be a mapping")
+    failure_class = facts.get("failure_class")
+    issue_id = facts.get("issue_id", facts.get("id"))
+    if failure_class not in FAILURE_CLASSES or not _non_empty_string(issue_id):
+        raise ValueError("failure chain requires a class and stable issue_id")
+    acceptance = _string_list(
+        facts.get("failed_acceptance", facts.get("failed_acceptance_ids", ())),
+        allow_empty=True,
+    )
+    commands = _string_list(
+        facts.get("failed_command", facts.get("failed_commands", ())),
+        allow_empty=True,
+    )
+    if not acceptance and not commands:
+        raise ValueError("failure chain requires a failed acceptance or command")
+    return (
+        issue_id.strip(),
+        tuple(acceptance),
+        tuple(commands),
+        failure_class,
+    )
+
+
+def failure_record_hash(record):
+    if not isinstance(record, Mapping):
+        raise ValueError("failure record must be a mapping")
+    payload = {key: value for key, value in record.items() if key != "record_hash"}
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def approval_record_hash(record):
+    if not isinstance(record, Mapping):
+        raise ValueError("approval record must be a mapping")
+    return hashlib.sha256(
+        json.dumps(
+            dict(record),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def seal_failure_record(record, predecessor_hash):
+    if predecessor_hash is not None and not _non_empty_string(predecessor_hash):
+        raise ValueError("failure predecessor hash must be null or non-empty")
+    sealed = copy.deepcopy(dict(record))
+    sealed["predecessor_hash"] = predecessor_hash
+    sealed["record_hash"] = failure_record_hash(sealed)
+    return sealed
+
+
+def failure_chain_manifest(records, *, integrity_origin="native"):
+    records = copy.deepcopy(list(records))
+    return {
+        "schema_version": 1,
+        "workflow_version": 1,
+        "integrity_origin": integrity_origin,
+        "count": len(records),
+        "head": records[-1].get("record_hash") if records else None,
+        "failure_attempts": records,
+    }
+
+
 def validate_threshold_override(
     override,
     ledger=(),
@@ -141,11 +217,20 @@ def validate_threshold_override(
             (
                 item
                 for item in reversed(list(ledger))
-                if isinstance(item, Mapping) and item.get("id") == approval_id
+                if isinstance(item, Mapping)
+                and item.get("id") == approval_id
+                and (
+                    override.get("approval_version") is None
+                    or item.get("version") == override.get("approval_version")
+                )
             ),
             None,
         )
     approval_type = approval.get("type") if isinstance(approval, Mapping) else None
+    approval_version = approval.get("version") if isinstance(approval, Mapping) else None
+    approval_hash = (
+        approval_record_hash(approval) if isinstance(approval, Mapping) else None
+    )
     valid_prefix = (
         isinstance(approval_id, str)
         and any(
@@ -161,6 +246,14 @@ def validate_threshold_override(
         and approval.get("status") == "approved"
         and approval.get("approved_by") == "user"
         and approval_id.startswith("{}-".format(approval_type))
+        and (
+            override.get("approval_version") is None
+            or override.get("approval_version") == approval_version
+        )
+        and (
+            override.get("approval_hash") is None
+            or override.get("approval_hash") == approval_hash
+        )
     ):
         conflicts.append(
             {
@@ -191,9 +284,174 @@ def validate_threshold_override(
         "valid": not conflicts,
         "threshold": threshold if not conflicts else None,
         "approval_id": approval_id,
+        "approval_version": approval_version,
+        "approval_hash": approval_hash,
         "reason": reason.strip() if _non_empty_string(reason) else reason,
         "conflicts": conflicts,
     }
+
+
+def validate_failure_chain(records, manifest=None, *, ledger=()):
+    conflicts = []
+    if not isinstance(records, Sequence) or isinstance(
+        records, (str, bytes, bytearray, Mapping)
+    ):
+        return {
+            "valid": False,
+            "conflicts": [{"conflict": "failure history must be a list"}],
+        }
+    records = list(records)
+    if manifest is not None:
+        if not isinstance(manifest, Mapping):
+            conflicts.append({"conflict": "failure manifest must be a mapping"})
+        else:
+            if manifest.get("failure_attempts") != records:
+                conflicts.append(
+                    {"conflict": "failure manifest contradicts workflow state"}
+                )
+            if manifest.get("count") != len(records):
+                conflicts.append({"conflict": "failure manifest count is invalid"})
+            expected_head = records[-1].get("record_hash") if records else None
+            if manifest.get("head") != expected_head:
+                conflicts.append({"conflict": "failure manifest head is invalid"})
+    previous_hash = None
+    prior_by_fingerprint = {}
+    for index, record in enumerate(records):
+        position = index + 1
+        if not isinstance(record, Mapping):
+            conflicts.append(
+                {"conflict": "failure record {} is not a mapping".format(position)}
+            )
+            continue
+        if record.get("predecessor_hash") != previous_hash:
+            conflicts.append(
+                {
+                    "conflict": "failure predecessor hash is broken at record {}".format(
+                        position
+                    )
+                }
+            )
+        if record.get("record_hash") != failure_record_hash(record):
+            conflicts.append(
+                {"conflict": "failure record hash is invalid at record {}".format(position)}
+            )
+        try:
+            fingerprint = issue_fingerprint(record)
+        except ValueError as error:
+            conflicts.append({"conflict": str(error)})
+            previous_hash = record.get("record_hash")
+            continue
+        if record.get("fingerprint") != fingerprint:
+            conflicts.append(
+                {"conflict": "failure fingerprint is invalid at record {}".format(position)}
+            )
+        failure_class = record.get("failure_class")
+        previous_same = prior_by_fingerprint.setdefault(fingerprint, [])
+        if any(item.get("failure_class") != failure_class for item in previous_same):
+            conflicts.append({"conflict": "failure class changed inside fingerprint chain"})
+        attempt_count = len(previous_same) + 1
+        if record.get("attempt_count") != attempt_count:
+            conflicts.append(
+                {"conflict": "failure attempt_count is invalid at record {}".format(position)}
+            )
+        threshold = record.get("threshold")
+        if threshold != DEFAULT_ATTEMPT_THRESHOLD:
+            override = record.get("threshold_override")
+            report = validate_threshold_override(
+                dict(override or {}, threshold=threshold),
+                ledger,
+                fingerprint=fingerprint,
+                issue_id=record.get("issue_id"),
+            )
+            if not report["valid"]:
+                conflicts.append({"conflict": report["conflicts"][0]["conflict"]})
+        new_chain_approval = record.get("new_chain_approval")
+        if new_chain_approval is not None:
+            approval_id = (
+                new_chain_approval.get("approval_id")
+                if isinstance(new_chain_approval, Mapping)
+                else None
+            )
+            approval_version = (
+                new_chain_approval.get("approval_version")
+                if isinstance(new_chain_approval, Mapping)
+                else None
+            )
+            expected_approval_hash = (
+                new_chain_approval.get("approval_hash")
+                if isinstance(new_chain_approval, Mapping)
+                else None
+            )
+            approval = next(
+                (
+                    item
+                    for item in ledger
+                    if isinstance(item, Mapping)
+                    and item.get("id") == approval_id
+                    and item.get("version") == approval_version
+                ),
+                None,
+            )
+            reason = (
+                new_chain_approval.get("reason")
+                if isinstance(new_chain_approval, Mapping)
+                else None
+            )
+            if not (
+                isinstance(approval, Mapping)
+                and approval.get("type") in {"DEC", "CHG"}
+                and approval.get("status") == "approved"
+                and approval.get("approved_by") == "user"
+                and approval.get("gate") == "new_failure_chain"
+                and approval.get("failure_fingerprint") == fingerprint
+                and approval.get("issue_id") == record.get("issue_id")
+                and approval.get("failure_class") == failure_class
+                and approval.get("originating_baseline")
+                == record.get("originating_baseline", record.get("git_baseline"))
+                and _non_empty_string(reason)
+                and approval.get("reason") == reason.strip()
+                and approval_record_hash(approval) == expected_approval_hash
+            ):
+                conflicts.append(
+                    {"conflict": "new failure chain approval is invalid"}
+                )
+        try:
+            action = next_action(
+                failure_class,
+                attempt_count=attempt_count,
+                threshold=threshold,
+            )
+        except ValueError as error:
+            conflicts.append({"conflict": str(error)})
+        else:
+            expected_stop = (
+                "stop ordinary repair and require grh-recover"
+                if action["action"] == "recover_required"
+                else "stop if the failure class or approved scope changes"
+            )
+            for field, expected in (
+                ("action", action["action"]),
+                ("ordinary_repair_allowed", action["ordinary_repair_allowed"]),
+                ("recommended_entry", action["recommended_entry"]),
+                ("stop_condition", expected_stop),
+            ):
+                if record.get(field) != expected:
+                    conflicts.append(
+                        {"conflict": "failure derived field {} is invalid".format(field)}
+                    )
+        expected_history = [
+            {
+                "attempt_count": item.get("attempt_count"),
+                "action": item.get("action"),
+                "evidence": list(item.get("evidence", ())),
+            }
+            for item in previous_same
+        ]
+        if record.get("attempt_history") != expected_history:
+            conflicts.append({"conflict": "failure attempt_history is invalid"})
+        previous_same.append(record)
+        previous_hash = record.get("record_hash")
+    return {"valid": not conflicts, "conflicts": conflicts}
 
 
 def record_attempt(history, failure=None, *, threshold_override=None, ledger=(), **facts):
@@ -298,9 +556,21 @@ def record_attempt(history, failure=None, *, threshold_override=None, ledger=(),
         "threshold_override": (
             {
                 "approval_id": override_report["approval_id"],
+                "approval_version": override_report["approval_version"],
+                "approval_hash": override_report["approval_hash"],
                 "reason": override_report["reason"],
             }
             if override_report is not None
+            else None
+        ),
+        "new_chain_approval": (
+            {
+                "approval_id": failure.get("new_chain_approval_id"),
+                "approval_version": failure.get("new_chain_approval_version"),
+                "approval_hash": failure.get("new_chain_approval_hash"),
+                "reason": failure.get("new_chain_reason"),
+            }
+            if failure.get("new_chain") is True
             else None
         ),
         "stop_condition": (
@@ -478,12 +748,18 @@ def next_action(
 
 
 __all__ = [
+    "approval_record_hash",
     "DEFAULT_ATTEMPT_THRESHOLD",
     "FAILURE_CLASSES",
+    "failure_chain_key",
+    "failure_chain_manifest",
+    "failure_record_hash",
     "REPAIR_MODES",
     "issue_fingerprint",
     "next_action",
     "record_attempt",
     "review_convergence",
+    "seal_failure_record",
+    "validate_failure_chain",
     "validate_threshold_override",
 ]

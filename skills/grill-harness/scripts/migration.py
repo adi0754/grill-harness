@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import common
+import failure_control
 
 
 FILES = {
@@ -18,6 +19,7 @@ FILES = {
     "artifacts.yaml": "artifacts",
     "tasks.yaml": "tasks",
     "evidence.yaml": "evidence",
+    "failures.yaml": "failure_attempts",
 }
 CURRENT_SCHEMA_VERSION = 1
 CURRENT_WORKFLOW_VERSION = 1
@@ -46,10 +48,46 @@ def _load_bundle(value):
     payloads = {}
     for filename in FILES:
         path = system / filename
+        if filename == "failures.yaml" and not path.is_file():
+            continue
         payload = common.read_yaml(path)
         if not isinstance(payload, dict):
             raise ValueError("machine file must be a mapping: {}".format(path))
         payloads[filename] = payload
+    if "failures.yaml" not in payloads:
+        state_payload = payloads.get("state.yaml")
+        if not isinstance(state_payload, dict):
+            raise ValueError("state must exist before synthesizing failure manifest")
+        records = state_payload.get("failure_attempts", [])
+        if not isinstance(records, list):
+            raise ValueError("legacy failure_attempts must be a list")
+        sealed = []
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("legacy failure attempt must be a mapping")
+            clean = {
+                key: value
+                for key, value in record.items()
+                if key not in {"predecessor_hash", "record_hash"}
+            }
+            sealed.append(
+                failure_control.seal_failure_record(
+                    clean, sealed[-1]["record_hash"] if sealed else None
+                )
+            )
+        report = failure_control.validate_failure_chain(
+            sealed, ledger=state_payload.get("ledger", ())
+        )
+        if not report["valid"]:
+            raise ValueError(report["conflicts"][0]["conflict"])
+        state_payload["failure_attempts"] = sealed
+        failure_manifest = failure_control.failure_chain_manifest(
+            sealed, integrity_origin="migration"
+        )
+        failure_manifest["schema_version"] = state_payload.get("schema_version", 0)
+        failure_manifest["workflow_version"] = state_payload.get("workflow_version", 0)
+        failure_manifest["_synthesized_missing"] = True
+        payloads["failures.yaml"] = failure_manifest
     return system, payloads
 
 
@@ -59,6 +97,7 @@ def _validate_bundle(payloads):
         ("artifacts.yaml", "artifacts"),
         ("tasks.yaml", "tasks"),
         ("evidence.yaml", "evidence"),
+        ("failures.yaml", "failure_attempts"),
     ):
         state_records = state_payload.get(field)
         manifest_records = payloads[filename].get(field)
@@ -66,6 +105,13 @@ def _validate_bundle(payloads):
             raise ValueError("{} records must be lists".format(field))
         if state_records != manifest_records:
             raise ValueError("{} manifest contradicts state".format(field))
+    failure_report = failure_control.validate_failure_chain(
+        state_payload.get("failure_attempts", ()),
+        payloads["failures.yaml"],
+        ledger=state_payload.get("ledger", ()),
+    )
+    if not failure_report["valid"]:
+        raise ValueError(failure_report["conflicts"][0]["conflict"])
 
 
 def _restore_interrupted(system):
@@ -76,11 +122,18 @@ def _restore_interrupted(system):
     if not isinstance(journal, dict) or not isinstance(journal.get("backups"), dict):
         raise ValueError("migration transaction journal is corrupt")
     for filename in FILES:
-        backup = Path(journal["backups"].get(filename, ""))
+        backup_value = journal["backups"].get(filename)
+        if backup_value is None:
+            continue
+        backup = Path(backup_value)
         if not backup.is_file():
             raise ValueError("migration transaction backup is missing: {}".format(backup))
     for filename in FILES:
-        shutil.copy2(journal["backups"][filename], str(system / filename))
+        backup_value = journal["backups"].get(filename)
+        if backup_value is None:
+            (system / filename).unlink(missing_ok=True)
+        else:
+            shutil.copy2(backup_value, str(system / filename))
     journal_path.unlink()
     return True
 
@@ -93,6 +146,7 @@ def migrate_workflow(value, checked_at=None):
 
 def _migrate_locked(system, checked_at=None):
     _restore_interrupted(system)
+    failure_manifest_existed = (system / "failures.yaml").is_file()
     _, payloads = _load_bundle(system / "state.yaml")
     _validate_bundle(payloads)
     versions = {
@@ -108,7 +162,7 @@ def _migrate_locked(system, checked_at=None):
     if source_version == CURRENT_WORKFLOW_VERSION and all(
         payload.get("schema_version") == CURRENT_SCHEMA_VERSION
         for payload in payloads.values()
-    ) and isinstance(payloads["state.yaml"].get("ledger"), list):
+    ) and isinstance(payloads["state.yaml"].get("ledger"), list) and failure_manifest_existed:
         return {
             "changed": False,
             "from_version": source_version,
@@ -121,6 +175,7 @@ def _migrate_locked(system, checked_at=None):
     migrated = {}
     for filename, payload in payloads.items():
         updated = copy.deepcopy(payload)
+        updated.pop("_synthesized_missing", None)
         updated["schema_version"] = CURRENT_SCHEMA_VERSION
         updated["workflow_version"] = CURRENT_WORKFLOW_VERSION
         if filename == "state.yaml":
@@ -145,9 +200,12 @@ def _migrate_locked(system, checked_at=None):
         backup_directory.mkdir(parents=True, exist_ok=False)
         for filename in FILES:
             source = system / filename
-            backup = backup_directory / filename
-            shutil.copy2(str(source), str(backup))
-            backups[filename] = str(backup)
+            if source.is_file():
+                backup = backup_directory / filename
+                shutil.copy2(str(source), str(backup))
+                backups[filename] = str(backup)
+            else:
+                backups[filename] = None
         journal_path = system / TRANSACTION_FILE
         common.atomic_write_yaml(
             journal_path,
@@ -162,7 +220,10 @@ def _migrate_locked(system, checked_at=None):
                 os.replace(str(temporary / filename), str(system / filename))
         except OSError:
             for filename, backup in backups.items():
-                shutil.copy2(backup, str(system / filename))
+                if backup is None:
+                    (system / filename).unlink(missing_ok=True)
+                else:
+                    shutil.copy2(backup, str(system / filename))
             journal_path.unlink(missing_ok=True)
             raise
         report = {
@@ -204,7 +265,10 @@ def _rollback_locked(report_path, system):
         raise ValueError("migration report has no usable backups")
     restored = []
     for filename in FILES:
-        backup = Path(report["backups"].get(filename, ""))
+        backup_value = report["backups"].get(filename)
+        if backup_value is None:
+            continue
+        backup = Path(backup_value)
         if not backup.is_file():
             raise ValueError("migration backup is missing: {}".format(backup))
     rollback_backup_directory = system / "备份" / (
@@ -223,8 +287,12 @@ def _rollback_locked(report_path, system):
     )
     try:
         for filename in FILES:
-            backup = Path(report["backups"][filename])
-            shutil.copy2(str(backup), str(system / filename))
+            backup_value = report["backups"].get(filename)
+            if backup_value is None:
+                (system / filename).unlink(missing_ok=True)
+            else:
+                backup = Path(backup_value)
+                shutil.copy2(str(backup), str(system / filename))
             restored.append(str(system / filename))
     except OSError:
         for filename, backup in current_backups.items():

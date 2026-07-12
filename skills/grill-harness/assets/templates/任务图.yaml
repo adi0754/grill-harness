@@ -5,6 +5,7 @@
       "status": "pending",
       "currentness": "current",
       "review_required": true,
+      "review_history": [],
       "review": {
         "status": "pending",
         "goals_satisfied": false,

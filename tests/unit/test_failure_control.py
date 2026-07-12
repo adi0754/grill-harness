@@ -1,5 +1,6 @@
 import sys
 import unittest
+import copy
 from pathlib import Path
 
 
@@ -108,6 +109,7 @@ class FailureControlTests(unittest.TestCase):
             {
                 "id": "DEC-101",
                 "type": "DEC",
+                "version": 1,
                 "status": "approved",
                 "approved_by": "user",
                 "failure_fingerprint": fingerprint,
@@ -118,6 +120,7 @@ class FailureControlTests(unittest.TestCase):
             {
                 "id": "CHG-102",
                 "type": "CHG",
+                "version": 1,
                 "status": "approved",
                 "approved_by": "agent",
                 "failure_fingerprint": fingerprint,
@@ -128,6 +131,7 @@ class FailureControlTests(unittest.TestCase):
             {
                 "id": "DEC-999",
                 "type": "DEC",
+                "version": 1,
                 "status": "approved",
                 "approved_by": "user",
                 "failure_fingerprint": "FAIL-9999999999999999",
@@ -173,12 +177,40 @@ class FailureControlTests(unittest.TestCase):
             fingerprint=fingerprint,
             issue_id="ISSUE-101",
         )
+        revised_ledger = ledger + [
+            dict(
+                ledger[0],
+                version=2,
+                reason="后续不同批准内容",
+            )
+        ]
+        snapshot_override = {
+            "threshold": 4,
+            "approval_id": "DEC-101",
+            "approval_version": 1,
+            "approval_hash": failure_control.approval_record_hash(ledger[0]),
+            "reason": "第四轮用于验证已由用户确认的新根因",
+        }
+        historical_snapshot = failure_control.validate_threshold_override(
+            snapshot_override,
+            revised_ledger,
+            fingerprint=fingerprint,
+            issue_id="ISSUE-101",
+        )
+        forged_snapshot = failure_control.validate_threshold_override(
+            dict(snapshot_override, approval_hash="0" * 64),
+            revised_ledger,
+            fingerprint=fingerprint,
+            issue_id="ISSUE-101",
+        )
 
         self.assertTrue(valid["valid"])
         self.assertEqual(valid["threshold"], 4)
         self.assertFalse(missing_reason["valid"])
         self.assertFalse(agent_only["valid"])
         self.assertFalse(unrelated["valid"])
+        self.assertTrue(historical_snapshot["valid"])
+        self.assertFalse(forged_snapshot["valid"])
 
     def test_record_attempt_counts_only_the_same_stable_fingerprint(self):
         facts = {
@@ -344,6 +376,36 @@ class FailureControlTests(unittest.TestCase):
             "grh-recover",
         ):
             self.assertIn(field, template)
+
+    def test_failure_manifest_hash_chain_detects_modification_and_deletion(self):
+        facts = {
+            "failure_class": "implementation_failure",
+            "issue_id": "ISSUE-800",
+            "failed_acceptance": ["REQ-800"],
+            "failed_command": [],
+            "originating_baseline": "origin-800",
+            "current_baseline": "current-800",
+        }
+        first = failure_control.record_attempt([], facts)
+        first_record = failure_control.seal_failure_record(first["record"], None)
+        second = failure_control.record_attempt([first_record], facts)
+        second_record = failure_control.seal_failure_record(
+            second["record"], first_record["record_hash"]
+        )
+        records = [first_record, second_record]
+        manifest = failure_control.failure_chain_manifest(records)
+
+        self.assertTrue(
+            failure_control.validate_failure_chain(records, manifest)["valid"]
+        )
+        modified = copy.deepcopy(records)
+        modified[0]["action"] = "root_cause_recheck"
+        self.assertFalse(
+            failure_control.validate_failure_chain(modified, manifest)["valid"]
+        )
+        self.assertFalse(
+            failure_control.validate_failure_chain(records[1:], manifest)["valid"]
+        )
 
 
 if __name__ == "__main__":

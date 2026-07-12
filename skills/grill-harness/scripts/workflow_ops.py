@@ -25,6 +25,12 @@ KINDS = {
     "evidence": ("evidence", "evidence.yaml"),
     "ledger": ("ledger", None),
 }
+MANIFEST_FILES = {
+    "artifacts": "artifacts.yaml",
+    "tasks": "tasks.yaml",
+    "evidence": "evidence.yaml",
+    "failure_attempts": "failures.yaml",
+}
 TRANSACTION_FILE = ".workflow-transaction.yaml"
 
 
@@ -51,14 +57,23 @@ def _load(state_path):
     _recover_interrupted_write(state_path)
     workflow = _mapping(state_path)
     manifests = {}
-    for field, filename in KINDS.values():
-        if filename is None:
-            continue
+    for field, filename in MANIFEST_FILES.items():
         path = state_path.parent / filename
         manifest = _mapping(path)
         if manifest.get(field) != workflow.get(field):
             raise ValueError("{} manifest contradicts state".format(field))
         manifests[field] = (path, manifest)
+    failure_report = failure_control.validate_failure_chain(
+        workflow.get("failure_attempts", ()),
+        manifests["failure_attempts"][1],
+        ledger=workflow.get("ledger", ()),
+    )
+    if not failure_report["valid"]:
+        raise ValueError(
+            "failure chain integrity conflict: {}".format(
+                failure_report["conflicts"][0]["conflict"]
+            )
+        )
     return workflow, manifests
 
 
@@ -153,6 +168,8 @@ def _validate_task_contract(record, workflow_root):
         raise ValueError(
             "new task review must be pending without a baseline; use task-review later"
         )
+    if record.get("review_history") != []:
+        raise ValueError("new task review_history must start empty")
 
 
 def _validate_review_payload(review, *, allow_pending):
@@ -173,12 +190,125 @@ def _validate_review_payload(review, *, allow_pending):
     comments = review.get("comments")
     if not isinstance(comments, list):
         raise ValueError("task review comments must be a list")
+    comment_ids = [
+        item.get("id") for item in comments if isinstance(item, dict)
+    ]
+    if len(comment_ids) != len(comments) or len(set(comment_ids)) != len(comment_ids):
+        raise ValueError("task review comments require unique stable IDs")
     failure_control.review_convergence(
         comments,
         goals_satisfied=review["goals_satisfied"],
         test_evidence_satisfied=review["test_evidence_satisfied"],
         unresolved_route_issue=review["unresolved_route_issue"],
     )
+
+
+def _review_classification(comment):
+    value = comment.get(
+        "classification", comment.get("disposition", comment.get("severity"))
+    )
+    aliases = {
+        "blocking": "blocking",
+        "must_fix": "must_fix",
+        "optional": "optional",
+        "optional_optimization": "optional",
+        "non_blocking": "optional",
+        "invalid": "invalid",
+        "not_applicable": "invalid",
+        "rejected": "invalid",
+    }
+    if value not in aliases:
+        raise ValueError("unknown review classification: {}".format(value))
+    return aliases[value]
+
+
+def _validate_review_append(previous, current):
+    if previous is None:
+        previous_comments = {}
+    else:
+        previous_comments = {item["id"]: item for item in previous["comments"]}
+    current_comments = {item["id"]: item for item in current["comments"]}
+    protected = {
+        comment_id
+        for comment_id, comment in previous_comments.items()
+        if _review_classification(comment) in {"blocking", "must_fix"}
+    }
+    missing = sorted(protected.difference(current_comments))
+    if missing:
+        raise ValueError(
+            "review history cannot delete blocking or must-fix comments: {}".format(
+                ", ".join(missing)
+            )
+        )
+    rank = {"invalid": 0, "optional": 1, "must_fix": 2, "blocking": 3}
+    terminal_statuses = {"resolved", "fixed", "rejected", "closed", "invalid"}
+    for comment_id, comment in current_comments.items():
+        classification = _review_classification(comment)
+        status = comment.get("status", "open")
+        if status != "open" and status not in terminal_statuses:
+            raise ValueError("unknown review status for {}".format(comment_id))
+        evidence = comment.get("evidence", [])
+        if not isinstance(evidence, list) or any(
+            not isinstance(item, str) or not item.strip() for item in evidence
+        ):
+            raise ValueError("review evidence must be a string list")
+        old = previous_comments.get(comment_id)
+        if old is None:
+            if status in terminal_statuses and not evidence:
+                raise ValueError("closed review comments require evidence")
+            continue
+        old_classification = _review_classification(old)
+        if rank[classification] < rank[old_classification]:
+            raise ValueError("review classification cannot be downgraded")
+        old_status = old.get("status", "open")
+        old_evidence = old.get("evidence", [])
+        if old_status in terminal_statuses and status != old_status:
+            raise ValueError("closed review comments cannot change status")
+        if old_status == "open" and status in terminal_statuses and not evidence:
+            raise ValueError("closing a review comment requires evidence")
+        if not set(old_evidence).issubset(evidence):
+            raise ValueError("review history cannot delete existing evidence")
+
+
+def _review_record_hash(review):
+    payload = {key: value for key, value in review.items() if key != "review_hash"}
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _seal_review_record(review, predecessor_hash, sequence):
+    sealed = dict(
+        copy.deepcopy(review),
+        predecessor_hash=predecessor_hash,
+        sequence=sequence,
+    )
+    sealed["review_hash"] = _review_record_hash(sealed)
+    return sealed
+
+
+def _validate_review_history(history):
+    if not isinstance(history, list) or any(
+        not isinstance(item, dict) for item in history
+    ):
+        raise ValueError("task review_history must be a list of mappings")
+    previous_hash = None
+    for index, item in enumerate(history):
+        _validate_review_payload(item, allow_pending=False)
+        if item.get("sequence") != index + 1:
+            raise ValueError("task review_history sequence is not contiguous")
+        if item.get("predecessor_hash") != previous_hash:
+            raise ValueError("task review_history predecessor hash is broken")
+        if item.get("review_hash") != _review_record_hash(item):
+            raise ValueError("task review_history record hash is invalid")
+        if index:
+            _validate_review_append(history[index - 1], item)
+        previous_hash = item["review_hash"]
 
 
 def _validate_repair_task_policy(record, workflow):
@@ -295,8 +425,10 @@ def _validate_repair_task_policy(record, workflow):
     approval = next(
         (
             item
-            for item in reversed(list(workflow.get("ledger", ())))
-            if isinstance(item, dict) and item.get("id") == approval_id
+            for item in workflow.get("ledger", ())
+            if isinstance(item, dict)
+            and item.get("id") == approval_id
+            and item.get("version") == record.get("repair_approval_version")
         ),
         None,
     )
@@ -314,6 +446,8 @@ def _validate_repair_task_policy(record, workflow):
         and approval.get("repair_mode") == repair_mode
         and approval.get("failure_fingerprint") == fingerprint
         and approval.get("issue_id") == latest.get("issue_id")
+        and failure_control.approval_record_hash(approval)
+        == record.get("repair_approval_hash")
         and isinstance(approval.get("reason"), str)
         and approval["reason"].strip()
     ):
@@ -328,8 +462,14 @@ def _write(state_path, workflow, manifests, extra_payloads=None):
     targets = {"state": state_path}
     payloads = {"state": workflow}
     for field, (path, manifest) in manifests.items():
-        updated = dict(manifest)
-        updated[field] = workflow[field]
+        if field == "failure_attempts":
+            updated = failure_control.failure_chain_manifest(
+                workflow[field],
+                integrity_origin=manifest.get("integrity_origin", "native"),
+            )
+        else:
+            updated = dict(manifest)
+            updated[field] = workflow[field]
         targets[field] = path
         payloads[field] = updated
     if "ledger" in workflow:
@@ -943,8 +1083,31 @@ def record_task_review(
             if task.get("status") not in {"in_progress", "blocked"}:
                 raise ValueError("task review can only be recorded while work is active")
             candidate = dict(task)
+            history = candidate.get("review_history")
+            if history is None:
+                existing_review = candidate.get("review")
+                history = (
+                    [
+                        _seal_review_record(
+                            existing_review,
+                            None,
+                            1,
+                        )
+                    ]
+                    if isinstance(existing_review, dict)
+                    and existing_review.get("status") == "recorded"
+                    else []
+                )
+            _validate_review_history(history)
+            recorded_review = _seal_review_record(
+                dict(copy.deepcopy(review), baseline=current_baseline),
+                history[-1]["review_hash"] if history else None,
+                len(history) + 1,
+            )
+            _validate_review_append(history[-1] if history else None, recorded_review)
             candidate["review_required"] = True
-            candidate["review"] = dict(copy.deepcopy(review), baseline=current_baseline)
+            candidate["review_history"] = list(history) + [recorded_review]
+            candidate["review"] = copy.deepcopy(recorded_review)
             updated_tasks.append(candidate)
         if not found:
             raise ValueError("unknown task: {}".format(task_id))
@@ -964,7 +1127,13 @@ def _validate_task_review_completion(
 ):
     if task.get("review_required") is not True:
         raise ValueError("task completion requires review_required: true")
-    review = task.get("review")
+    history = task.get("review_history")
+    if not isinstance(history, list) or not history:
+        raise ValueError("task completion requires append-only review_history")
+    _validate_review_history(history)
+    review = history[-1]
+    if task.get("review") != review:
+        raise ValueError("current task review must be derived from review_history")
     _validate_review_payload(review, allow_pending=False)
     if review.get("baseline") != current_baseline:
         raise ValueError("task review baseline is missing or no longer current")
@@ -1044,8 +1213,33 @@ def record_failure_attempt(
         if not isinstance(history, list):
             raise ValueError("failure_attempts must be a list")
         existing_fingerprint = failure.get("fingerprint")
+        new_chain = failure.get("new_chain") is True
+        if new_chain and existing_fingerprint is not None:
+            raise ValueError("new chain cannot also select an existing fingerprint")
+        requested_key = failure_control.failure_chain_key(failure)
+        candidate_fingerprints = []
+        for item in history:
+            if not isinstance(item, dict):
+                raise ValueError("failure_attempts entries must be mappings")
+            if failure_control.failure_chain_key(item) != requested_key:
+                continue
+            candidate = item.get("fingerprint")
+            if not isinstance(candidate, str) or not candidate.strip():
+                raise ValueError("existing failure chain candidate has no fingerprint")
+            if candidate not in candidate_fingerprints:
+                candidate_fingerprints.append(candidate)
+        if not new_chain and existing_fingerprint is None:
+            if len(candidate_fingerprints) == 1:
+                existing_fingerprint = candidate_fingerprints[0]
+                failure = dict(failure, fingerprint=existing_fingerprint)
+            elif len(candidate_fingerprints) > 1:
+                raise ValueError(
+                    "multiple existing failure chains match; select one fingerprint or approve a new chain"
+                )
+        elif not new_chain and candidate_fingerprints and existing_fingerprint not in candidate_fingerprints:
+            raise ValueError("provided failure fingerprint does not match the existing chain candidate")
         originating_baseline = failure.get("originating_baseline")
-        if existing_fingerprint is not None:
+        if not new_chain and existing_fingerprint is not None:
             matching = [
                 item
                 for item in history
@@ -1061,6 +1255,46 @@ def record_failure_attempt(
             if len(originating_baselines) != 1 or not all(originating_baselines):
                 raise ValueError("existing failure chain has no stable originating baseline")
             originating_baseline = next(iter(originating_baselines))
+        if new_chain:
+            originating_baseline = current_baseline
+            new_fingerprint = failure_control.issue_fingerprint(
+                dict(failure, originating_baseline=originating_baseline)
+            )
+            if new_fingerprint in candidate_fingerprints:
+                raise ValueError("new failure chain must use a different originating baseline")
+            approval_id = failure.get("new_chain_approval_id")
+            reason = failure.get("new_chain_reason")
+            approval = next(
+                (
+                    item
+                    for item in reversed(list(workflow.get("ledger", ())))
+                    if isinstance(item, dict) and item.get("id") == approval_id
+                ),
+                None,
+            )
+            if not (
+                isinstance(reason, str)
+                and reason.strip()
+                and isinstance(approval, dict)
+                and approval.get("type") in {"DEC", "CHG"}
+                and approval.get("status") == "approved"
+                and approval.get("approved_by") == "user"
+                and approval.get("gate") == "new_failure_chain"
+                and approval.get("failure_fingerprint") == new_fingerprint
+                and approval.get("issue_id") == failure.get("issue_id")
+                and approval.get("failure_class") == failure.get("failure_class")
+                and approval.get("originating_baseline") == originating_baseline
+                and approval.get("reason") == reason.strip()
+            ):
+                raise ValueError(
+                    "new failure chain requires a durable user DEC/CHG bound to the new chain and reason"
+                )
+            failure = dict(
+                failure,
+                fingerprint=new_fingerprint,
+                new_chain_approval_version=approval.get("version"),
+                new_chain_approval_hash=failure_control.approval_record_hash(approval),
+            )
         if originating_baseline is None:
             originating_baseline = current_baseline
         facts = dict(
@@ -1074,8 +1308,22 @@ def record_failure_attempt(
             threshold_override=threshold_override,
             ledger=workflow.get("ledger", ()),
         )
+        sealed_record = failure_control.seal_failure_record(
+            report["record"],
+            history[-1].get("record_hash") if history else None,
+        )
+        sealed_history = list(history) + [sealed_record]
+        chain_report = failure_control.validate_failure_chain(
+            sealed_history,
+            failure_control.failure_chain_manifest(sealed_history),
+            ledger=workflow.get("ledger", ()),
+        )
+        if not chain_report["valid"]:
+            raise ValueError(chain_report["conflicts"][0]["conflict"])
+        report["record"] = sealed_record
+        report["history"] = sealed_history
         updated = dict(workflow)
-        updated["failure_attempts"] = report["history"]
+        updated["failure_attempts"] = sealed_history
         _write(state_path, updated, manifests)
     result = {key: value for key, value in report.items() if key != "history"}
     result["workflow_path"] = str(state_path)

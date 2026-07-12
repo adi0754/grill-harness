@@ -41,6 +41,7 @@ class MigrationTests(unittest.TestCase):
                 payload.pop("schema_version", None)
             payload["future_unknown"] = {"keep": True}
             path.write_text(json.dumps(payload), encoding="utf-8")
+        (workflow / "系统" / "failures.yaml").unlink()
         return env, workflow
 
     def test_migration_backs_up_preserves_unknown_fields_and_can_rollback(self):
@@ -59,6 +60,11 @@ class MigrationTests(unittest.TestCase):
             )
             self.assertEqual(state_payload["workflow_version"], 1)
             self.assertEqual(state_payload["future_unknown"], {"keep": True})
+            failure_manifest = json.loads(
+                (workflow / "系统" / "failures.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(failure_manifest["integrity_origin"], "migration")
+            self.assertEqual(failure_manifest["count"], 0)
 
             rolled_back = run_cli(
                 "rollback", "--report", str(report_path), env=env
@@ -70,6 +76,7 @@ class MigrationTests(unittest.TestCase):
             )
             self.assertNotIn("workflow_version", restored)
             self.assertEqual(restored["future_unknown"], {"keep": True})
+            self.assertFalse((workflow / "系统" / "failures.yaml").exists())
 
     def test_migration_refuses_divergent_manifests_without_writes(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -363,6 +363,7 @@ class WorkflowOperationTests(unittest.TestCase):
             forged_review.update(
                 {
                     "review_required": True,
+                    "review_history": [],
                     "review": {
                         "status": "recorded",
                         "baseline": full["git_baseline"],
@@ -381,6 +382,7 @@ class WorkflowOperationTests(unittest.TestCase):
             full.update(
                 {
                     "review_required": True,
+                    "review_history": [],
                     "review": {
                         "status": "pending",
                         "goals_satisfied": False,
@@ -497,10 +499,10 @@ class WorkflowOperationTests(unittest.TestCase):
                         "unresolved_route_issue": False,
                         "comments": [
                             {
-                                "id": "ISSUE-WRONG",
+                                "id": "ISSUE-MUST",
                                 "classification": "must_fix",
-                                "status": "fixed",
-                                "evidence": ["EVD-001"],
+                                "status": "open",
+                                "evidence": [],
                             },
                             {
                                 "id": "ISSUE-OPTIONAL",
@@ -525,7 +527,26 @@ class WorkflowOperationTests(unittest.TestCase):
                 "--project", str(Path(directory) / "project"), env=env,
             )
             corrected_review = json.loads(review_path.read_text(encoding="utf-8"))
-            corrected_review["comments"][0]["id"] = "ISSUE-MUST"
+            deletion_review = dict(corrected_review)
+            deletion_review["comments"] = [corrected_review["comments"][1]]
+            review_path.write_text(json.dumps(deletion_review), encoding="utf-8")
+            deleted_must_fix = run_cli(
+                "task-review", "--workflow", str(workflow),
+                "--task", "TASK-001", "--review", str(review_path),
+                "--project", str(Path(directory) / "project"), env=env,
+            )
+            downgraded_review = json.loads(
+                json.dumps(corrected_review)
+            )
+            downgraded_review["comments"][0]["classification"] = "optional_optimization"
+            review_path.write_text(json.dumps(downgraded_review), encoding="utf-8")
+            downgraded_must_fix = run_cli(
+                "task-review", "--workflow", str(workflow),
+                "--task", "TASK-001", "--review", str(review_path),
+                "--project", str(Path(directory) / "project"), env=env,
+            )
+            corrected_review["comments"][0]["status"] = "fixed"
+            corrected_review["comments"][0]["evidence"] = ["EVD-001"]
             review_path.write_text(json.dumps(corrected_review), encoding="utf-8")
             review_corrected = run_cli(
                 "task-review", "--workflow", str(workflow),
@@ -578,9 +599,11 @@ class WorkflowOperationTests(unittest.TestCase):
             )
             self.assertEqual(bad_review_completion.returncode, 2, bad_review_completion.stdout)
             self.assertIn(
-                "ISSUE-WRONG",
+                "ISSUE-MUST",
                 json.loads(bad_review_completion.stdout)["error"]["message"],
             )
+            self.assertEqual(deleted_must_fix.returncode, 2, deleted_must_fix.stdout)
+            self.assertEqual(downgraded_must_fix.returncode, 2, downgraded_must_fix.stdout)
             self.assertEqual(review_corrected.returncode, 0, review_corrected.stdout)
             self.assertEqual(completed.returncode, 0, completed.stdout)
             completed_state = json.loads(
@@ -735,6 +758,21 @@ class WorkflowOperationTests(unittest.TestCase):
                 [item["attempt_count"] for item in persisted["failure_attempts"]],
                 [1, 2, 3],
             )
+            failure_manifest = json.loads(
+                (workflow / "系统" / "failures.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(failure_manifest["failure_attempts"], persisted["failure_attempts"])
+            self.assertEqual(failure_manifest["count"], 3)
+            self.assertEqual(
+                failure_manifest["head"], persisted["failure_attempts"][-1]["record_hash"]
+            )
+            self.assertTrue(
+                failure_control.validate_failure_chain(
+                    persisted["failure_attempts"],
+                    failure_manifest,
+                    ledger=persisted["ledger"],
+                )["valid"]
+            )
             package = workflow / "过程产物" / "审查修复" / "TASK-REPAIR-修复任务.md"
             package.parent.mkdir(parents=True, exist_ok=True)
             package.write_text("repair package\n", encoding="utf-8")
@@ -749,6 +787,7 @@ class WorkflowOperationTests(unittest.TestCase):
                         "task_type": "repair",
                         "repair_mode": "ordinary",
                         "review_required": True,
+                        "review_history": [],
                         "review": {
                             "status": "pending",
                             "goals_satisfied": False,
@@ -847,6 +886,12 @@ class WorkflowOperationTests(unittest.TestCase):
                 "--record", str(recovery_approval), env=env,
             )
             privileged_task["repair_approval_id"] = "DEC-777"
+            privileged_task["repair_approval_version"] = 1
+            privileged_task["repair_approval_hash"] = (
+                failure_control.approval_record_hash(
+                    json.loads(recovery_approval.read_text(encoding="utf-8"))
+                )
+            )
             task_record.write_text(json.dumps(privileged_task), encoding="utf-8")
             authorized_recovery = run_cli(
                 "record", "--workflow", str(workflow), "--kind", "task",
@@ -865,6 +910,10 @@ class WorkflowOperationTests(unittest.TestCase):
                 }
             )
             state_path.write_text(json.dumps(persisted), encoding="utf-8")
+            reconciled_tamper = run_cli(
+                "reconcile", "--workflow", str(workflow),
+                "--project", str(base / "project"), env=env,
+            )
             tampered_task = json.loads(task_record.read_text(encoding="utf-8"))
             tampered_task.update({"id": "TASK-TAMPER", "attempt_count": 2})
             task_record.write_text(json.dumps(tampered_task), encoding="utf-8")
@@ -881,8 +930,17 @@ class WorkflowOperationTests(unittest.TestCase):
             )
 
             self.assertEqual(tampered.returncode, 2, tampered.stdout)
+            self.assertEqual(reconciled_tamper.returncode, 1, reconciled_tamper.stdout)
             self.assertIn(
-                "contiguous", json.loads(tampered.stdout)["error"]["message"]
+                "FAILURE_MANIFEST_DIVERGENCE",
+                {
+                    item["code"]
+                    for item in json.loads(reconciled_tamper.stdout)["reconciliation"]["conflicts"]
+                },
+            )
+            self.assertIn(
+                "failure_attempts manifest",
+                json.loads(tampered.stdout)["error"]["message"],
             )
 
     def test_failure_threshold_override_uses_persisted_user_decision(self):
@@ -996,8 +1054,6 @@ class WorkflowOperationTests(unittest.TestCase):
             (project / "README.md").write_text("repair changed baseline\n", encoding="utf-8")
             second = run_cli(
                 *common_arguments,
-                "--existing-fingerprint",
-                first_payload["fingerprint"],
                 env=env,
             )
 
@@ -1014,6 +1070,74 @@ class WorkflowOperationTests(unittest.TestCase):
                 second_payload["record"]["current_baseline"],
                 first_payload["record"]["current_baseline"],
             )
+
+            (project / "README.md").write_text(
+                "second repair changed baseline\n", encoding="utf-8"
+            )
+            wrong_fingerprint = run_cli(
+                *common_arguments,
+                "--existing-fingerprint",
+                "FAIL-0000000000000000",
+                env=env,
+            )
+            unapproved_new_chain = run_cli(
+                *common_arguments,
+                "--new-chain",
+                "--new-chain-reason",
+                "用户确认原修复链不再适用",
+                env=env,
+            )
+            current_baseline = grh._current_baseline(
+                project, state.identify_project(project)
+            )
+            new_fingerprint = failure_control.issue_fingerprint(
+                {
+                    "issue_id": "ISSUE-501",
+                    "failed_acceptance": ["REQ-501"],
+                    "failed_command": [],
+                    "originating_baseline": current_baseline,
+                }
+            )
+            approval = workflow / "系统" / "new-chain-approval.yaml"
+            approval.write_text(
+                json.dumps(
+                    {
+                        "id": "DEC-501",
+                        "type": "DEC",
+                        "version": 1,
+                        "status": "approved",
+                        "approved_by": "user",
+                        "gate": "new_failure_chain",
+                        "failure_fingerprint": new_fingerprint,
+                        "issue_id": "ISSUE-501",
+                        "failure_class": "implementation_failure",
+                        "originating_baseline": current_baseline,
+                        "reason": "用户确认原修复链不再适用",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approval_registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "ledger",
+                "--record", str(approval), env=env,
+            )
+            approved_new_chain = run_cli(
+                *common_arguments,
+                "--new-chain",
+                "--new-chain-approval-id",
+                "DEC-501",
+                "--new-chain-reason",
+                "用户确认原修复链不再适用",
+                env=env,
+            )
+
+            self.assertEqual(wrong_fingerprint.returncode, 2, wrong_fingerprint.stdout)
+            self.assertEqual(unapproved_new_chain.returncode, 2, unapproved_new_chain.stdout)
+            self.assertEqual(approval_registered.returncode, 0, approval_registered.stdout)
+            self.assertEqual(approved_new_chain.returncode, 0, approved_new_chain.stdout)
+            approved_payload = json.loads(approved_new_chain.stdout)["failure"]
+            self.assertEqual(approved_payload["fingerprint"], new_fingerprint)
+            self.assertEqual(approved_payload["attempt_count"], 1)
 
     def test_concurrent_failure_records_keep_every_unique_attempt_number(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1063,6 +1187,7 @@ class WorkflowOperationTests(unittest.TestCase):
                 workflow / "系统" / "artifacts.yaml",
                 workflow / "系统" / "tasks.yaml",
                 workflow / "系统" / "evidence.yaml",
+                workflow / "系统" / "failures.yaml",
             ]
             before = {path: path.read_bytes() for path in tracked}
             original_unlink = Path.unlink
