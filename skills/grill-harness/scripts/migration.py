@@ -206,6 +206,7 @@ def _hydrate_repair_approval_snapshots(state_payload, tasks_manifest):
 
 def _hydrate_and_seal_failure_records(records, ledger):
     sealed = []
+    hydration_changed = False
     for record in records:
         if not isinstance(record, dict):
             raise ValueError("legacy failure attempt must be a mapping")
@@ -214,13 +215,15 @@ def _hydrate_and_seal_failure_records(records, ledger):
             for key, value in record.items()
             if key not in {"predecessor_hash", "record_hash"}
         }
+        before_hydration = copy.deepcopy(clean)
         _hydrate_failure_approval_snapshots(clean, ledger)
+        hydration_changed = hydration_changed or clean != before_hydration
         sealed.append(
             failure_control.seal_failure_record(
                 clean, sealed[-1]["record_hash"] if sealed else None
             )
         )
-    return sealed
+    return sealed, hydration_changed
 
 
 def _load_bundle(value):
@@ -241,8 +244,9 @@ def _load_bundle(value):
     if not isinstance(records, list):
         raise ValueError("legacy failure_attempts must be a list")
     ledger = state_payload.get("ledger", ())
+    hydration_changed = False
     if "failures.yaml" not in payloads:
-        sealed = _hydrate_and_seal_failure_records(records, ledger)
+        sealed, _ = _hydrate_and_seal_failure_records(records, ledger)
         report = failure_control.validate_failure_chain(
             sealed, ledger=ledger
         )
@@ -256,20 +260,33 @@ def _load_bundle(value):
         failure_manifest["workflow_version"] = state_payload.get("workflow_version", 0)
         failure_manifest["_synthesized_missing"] = True
         payloads["failures.yaml"] = failure_manifest
-    elif state_payload.get("workflow_version", 0) == 0:
+    else:
         failure_manifest = payloads["failures.yaml"]
         manifest_records = failure_manifest.get("failure_attempts")
         if isinstance(manifest_records, list) and manifest_records == records:
-            sealed = _hydrate_and_seal_failure_records(records, ledger)
-            state_payload["failure_attempts"] = sealed
-            failure_manifest["failure_attempts"] = copy.deepcopy(sealed)
-            failure_manifest["count"] = len(sealed)
-            failure_manifest["head"] = (
-                sealed[-1].get("record_hash") if sealed else None
+            sealed, approval_hydration_changed = (
+                _hydrate_and_seal_failure_records(records, ledger)
             )
+            if (
+                state_payload.get("workflow_version", 0) == 0
+                or approval_hydration_changed
+            ):
+                state_payload["failure_attempts"] = sealed
+                failure_manifest["failure_attempts"] = copy.deepcopy(sealed)
+                failure_manifest["count"] = len(sealed)
+                failure_manifest["head"] = (
+                    sealed[-1].get("record_hash") if sealed else None
+                )
+            hydration_changed = approval_hydration_changed
     tasks_manifest = payloads.get("tasks.yaml")
     if isinstance(tasks_manifest, dict):
+        tasks_before = copy.deepcopy(state_payload.get("tasks"))
         _hydrate_repair_approval_snapshots(state_payload, tasks_manifest)
+        hydration_changed = (
+            hydration_changed or state_payload.get("tasks") != tasks_before
+        )
+    if hydration_changed:
+        state_payload["_migration_hydration_changed"] = True
     return system, payloads
 
 
@@ -341,10 +358,20 @@ def _migrate_locked(system, checked_at=None):
     source_version = versions.pop()
     if source_version > CURRENT_WORKFLOW_VERSION:
         raise ValueError("workflow version is newer than this skill")
-    if source_version == CURRENT_WORKFLOW_VERSION and all(
+    current_schema = all(
         payload.get("schema_version") == CURRENT_SCHEMA_VERSION
         for payload in payloads.values()
-    ) and isinstance(payloads["state.yaml"].get("ledger"), list) and failure_manifest_existed:
+    )
+    hydration_changed = payloads["state.yaml"].get(
+        "_migration_hydration_changed", False
+    )
+    if (
+        source_version == CURRENT_WORKFLOW_VERSION
+        and current_schema
+        and isinstance(payloads["state.yaml"].get("ledger"), list)
+        and failure_manifest_existed
+        and not hydration_changed
+    ):
         return {
             "changed": False,
             "from_version": source_version,
@@ -358,6 +385,7 @@ def _migrate_locked(system, checked_at=None):
     for filename, payload in payloads.items():
         updated = copy.deepcopy(payload)
         updated.pop("_synthesized_missing", None)
+        updated.pop("_migration_hydration_changed", None)
         updated["schema_version"] = CURRENT_SCHEMA_VERSION
         updated["workflow_version"] = CURRENT_WORKFLOW_VERSION
         if filename == "state.yaml":

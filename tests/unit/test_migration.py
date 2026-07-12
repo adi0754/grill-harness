@@ -235,6 +235,7 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(migrated.returncode, 0, migrated.stdout)
             migrated_state = json.loads(state_path.read_text(encoding="utf-8"))
             migrated_manifest = json.loads(failures_path.read_text(encoding="utf-8"))
+            self.assertNotIn("_migration_hydration_changed", migrated_state)
             self.assertEqual(
                 migrated_state["failure_attempts"],
                 migrated_manifest["failure_attempts"],
@@ -245,6 +246,135 @@ class MigrationTests(unittest.TestCase):
                 snapshot["approval_hash"],
                 failure_control.approval_record_hash(approval),
             )
+
+    def test_migration_writes_hydrated_snapshots_for_a_version_one_workflow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            created = run_cli(
+                "init",
+                "--project",
+                str(project),
+                "--workflow-name",
+                "真实升级",
+                "--workflow-key",
+                "real-upgrade",
+                "--created-date",
+                "2026-07-12",
+                env=env,
+            )
+            workflow = Path(json.loads(created.stdout)["workflow_path"])
+            state_path = workflow / "系统" / "state.yaml"
+            failures_path = workflow / "系统" / "failures.yaml"
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            facts = {
+                "failure_class": "implementation_failure",
+                "issue_id": "ISSUE-708",
+                "failed_command": ["python3 -m unittest"],
+                "failed_acceptance": [],
+                "originating_baseline": state_payload["git_baseline"],
+                "current_baseline": state_payload["git_baseline"],
+            }
+            fingerprint = failure_control.issue_fingerprint(facts)
+            approval = {
+                "id": "DEC-708",
+                "type": "DEC",
+                "version": 1,
+                "status": "approved",
+                "approved_by": "user",
+                "failure_fingerprint": fingerprint,
+                "issue_id": "ISSUE-708",
+                "approved_threshold": 4,
+                "reason": "legacy threshold",
+            }
+            attempt = failure_control.record_attempt(
+                [],
+                facts,
+                threshold_override={
+                    "threshold": 4,
+                    "approval_id": "DEC-708",
+                    "reason": "legacy threshold",
+                },
+                ledger=[approval],
+            )["record"]
+            attempt["threshold_override"].pop("approval_version")
+            attempt["threshold_override"].pop("approval_hash")
+            sealed = failure_control.seal_failure_record(attempt, None)
+            state_payload["ledger"] = [approval]
+            state_payload["failure_attempts"] = [sealed]
+            state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+            manifest = failure_control.failure_chain_manifest([sealed])
+            failures_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            migrated = run_cli("migrate", "--workflow", str(workflow), env=env)
+
+            self.assertEqual(migrated.returncode, 0, migrated.stdout)
+            self.assertTrue(json.loads(migrated.stdout)["migration"]["changed"])
+            migrated_state = json.loads(state_path.read_text(encoding="utf-8"))
+            migrated_manifest = json.loads(failures_path.read_text(encoding="utf-8"))
+            self.assertNotIn("_migration_hydration_changed", migrated_state)
+            self.assertEqual(
+                migrated_state["failure_attempts"],
+                migrated_manifest["failure_attempts"],
+            )
+            snapshot = migrated_state["failure_attempts"][0]["threshold_override"]
+            self.assertEqual(snapshot["approval_version"], 1)
+            self.assertEqual(
+                snapshot["approval_hash"],
+                failure_control.approval_record_hash(approval),
+            )
+
+    def test_migration_does_not_reseal_unrelated_current_version_corruption(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            created = run_cli(
+                "init",
+                "--project",
+                str(project),
+                "--workflow-name",
+                "损坏检查",
+                "--workflow-key",
+                "corruption-check",
+                "--created-date",
+                "2026-07-12",
+                env=env,
+            )
+            workflow = Path(json.loads(created.stdout)["workflow_path"])
+            state_path = workflow / "系统" / "state.yaml"
+            failures_path = workflow / "系统" / "failures.yaml"
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            attempt = failure_control.record_attempt(
+                [],
+                {
+                    "failure_class": "implementation_failure",
+                    "issue_id": "ISSUE-709",
+                    "failed_command": ["python3 -m unittest"],
+                    "failed_acceptance": [],
+                    "originating_baseline": state_payload["git_baseline"],
+                    "current_baseline": state_payload["git_baseline"],
+                },
+            )["record"]
+            sealed = failure_control.seal_failure_record(attempt, None)
+            sealed["record_hash"] = "0" * 64
+            state_payload["failure_attempts"] = [sealed]
+            state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+            manifest = failure_control.failure_chain_manifest([sealed])
+            failures_path.write_text(json.dumps(manifest), encoding="utf-8")
+            before = self._yaml_snapshot(workflow)
+
+            result = run_cli("migrate", "--workflow", str(workflow), env=env)
+
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(self._yaml_snapshot(workflow), before)
 
     def test_migration_rejects_a_conflicting_partial_approval_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
