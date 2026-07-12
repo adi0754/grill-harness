@@ -27,6 +27,16 @@ ANALOGUE_FIELDS = (
     "reusable_tests",
     "new_behavior",
 )
+RISK_SIGNAL_LEVELS = {
+    "cross_module_call_chain": "medium",
+    "multiple_inconsistent_precedents": "medium",
+    "public_contract_change": "high",
+    "schema_change": "high",
+    "constraint_conflict": "high",
+    "impact_unknown": "high",
+    "high_rework_cost": "high",
+}
+ALLOWED_RISK_SIGNALS = frozenset(RISK_SIGNAL_LEVELS)
 
 
 def _non_empty_string(value):
@@ -88,6 +98,11 @@ def validate_radar_record(record):
             _conflict("risk_signals", "risk signals must be a mapping of booleans")
         )
         derived_escalation = None
+    elif not set(risk_signals).issubset(ALLOWED_RISK_SIGNALS):
+        conflicts.append(
+            _conflict("risk_signals", "risk signals contain unknown keys")
+        )
+        derived_escalation = None
     else:
         derived_escalation = classify_escalation(risk_signals)["level"]
     escalation = record.get("escalation")
@@ -143,6 +158,15 @@ def validate_radar_record(record):
                         "investigation must state whether it blocks the baseline",
                     )
                 )
+            elif investigation["blocks_baseline"] != (
+                record.get("blocking_level") == "baseline"
+            ):
+                conflicts.append(
+                    _conflict(
+                        "investigation_plan.blocks_baseline",
+                        "investigation baseline fact must match record blocking level",
+                    )
+                )
             if investigation.get("agent_selection") != "needs_user":
                 conflicts.append(
                     _conflict(
@@ -157,17 +181,16 @@ def classify_escalation(facts):
     """Classify scan facts using the design's bounded escalation rules."""
 
     facts = facts if isinstance(facts, Mapping) else {}
-    high_signals = (
-        "public_contract_change",
-        "schema_change",
-        "constraint_conflict",
-        "impact_unknown",
-        "high_rework_cost",
-    )
-    if any(facts.get(signal) for signal in high_signals):
+    if any(
+        facts.get(signal)
+        for signal, level in RISK_SIGNAL_LEVELS.items()
+        if level == "high"
+    ):
         return {"level": "high", "independent_investigation": True}
-    if facts.get("cross_module_call_chain") or facts.get(
-        "multiple_inconsistent_precedents"
+    if any(
+        facts.get(signal)
+        for signal, level in RISK_SIGNAL_LEVELS.items()
+        if level == "medium"
     ):
         return {"level": "medium", "independent_investigation": False}
     return {"level": "low", "independent_investigation": False}

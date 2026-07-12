@@ -109,6 +109,16 @@ class RequirementsRadarTests(unittest.TestCase):
             any(item["field"] == "escalation" for item in downgraded_report["conflicts"])
         )
 
+    def test_unknown_or_misspelled_risk_signal_is_rejected(self):
+        record = self.radar(risk_signals={"schema_changes": True})
+
+        report = requirements_radar.validate_radar_record(record)
+
+        self.assertFalse(report["valid"])
+        self.assertTrue(
+            any(item["field"] == "risk_signals" for item in report["conflicts"])
+        )
+
     def test_derived_high_risk_cannot_omit_investigation_plan(self):
         record = self.radar(
             escalation="high",
@@ -119,6 +129,38 @@ class RequirementsRadarTests(unittest.TestCase):
         self.assertTrue(
             any(item["field"] == "investigation_plan" for item in report["conflicts"])
         )
+
+    def test_high_investigation_blocking_fact_matches_record_blocking_level(self):
+        plan = {
+            "reason": "公共契约变化",
+            "question": "消费者如何迁移？",
+            "role": "repository-investigator",
+            "expected_output": "迁移影响清单",
+            "agent_selection": "needs_user",
+        }
+        says_blocking = self.radar(
+            escalation="high",
+            risk_signals={"public_contract_change": True},
+            blocking_level="implementation",
+            investigation_plan=dict(plan, blocks_baseline=True),
+        )
+        says_non_blocking = self.radar(
+            escalation="high",
+            risk_signals={"public_contract_change": True},
+            blocking_level="baseline",
+            investigation_plan=dict(plan, blocks_baseline=False),
+        )
+
+        for record in (says_blocking, says_non_blocking):
+            with self.subTest(record=record):
+                report = requirements_radar.validate_radar_record(record)
+                self.assertFalse(report["valid"])
+                self.assertTrue(
+                    any(
+                        item["field"] == "investigation_plan.blocks_baseline"
+                        for item in report["conflicts"]
+                    )
+                )
 
     def test_only_current_open_baseline_records_block_approval(self):
         records = [

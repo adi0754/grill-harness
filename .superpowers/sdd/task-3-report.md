@@ -48,3 +48,9 @@
 - 推导结果为 high 时，强制完整 `investigation_plan`，并要求 `agent_selection=needs_user`；缺失计划或自动派发均拒绝。
 - `traceability_report()` 现在严格要求每个下游产物的 `radar_ids` 为非字符串序列，且每项均满足严格 `RAD-[0-9]{3,}`；容器或 ID 非法时返回 contract conflict。
 - 新增 3 个绕过回归测试；目标组合 37 项通过，全量 225 项通过。
+
+## 二次复审修复追加
+
+- 集中声明 `RISK_SIGNAL_LEVELS` / `ALLOWED_RISK_SIGNALS`，分类器与 validator 共用同一词表；未知或拼错键（如 `schema_changes`）直接拒绝，不能静默降为 low。
+- 对 high 记录强制 `investigation_plan.blocks_baseline` 与 `blocking_level` 表达同一事实：true 只能对应 baseline，false 不得对应 baseline。
+- 新增 2 个绕过回归测试；目标组合 39 项通过，全量 227 项通过。
