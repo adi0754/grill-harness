@@ -51,7 +51,7 @@ grep -Fq '"valid": true' <<<"$reconcile" \
   || fail "installed reconcile command rejected a valid workflow"
 
 upstream=$(python3 "$INSTALLED_SCRIPTS/grh.py" upstream-check \
-  --previous "$REPO_ROOT/tests/fixtures/upstream/current.json" \
+  --previous "$REPO_ROOT/skills/grill-harness/references/上游清单.yaml" \
   --facts "$REPO_ROOT/tests/fixtures/upstream/current.json" \
   --checked-at 2026-07-12T00:00:00Z --offline)
 grep -Fq '"actions_performed": false' <<<"$upstream" \

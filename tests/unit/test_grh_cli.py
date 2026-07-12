@@ -136,6 +136,7 @@ class GrillHarnessCliTests(unittest.TestCase):
             state_payload = json.loads((workflow / "系统" / "state.yaml").read_text(encoding="utf-8"))
             self.assertEqual(state_payload["workflow_id"], payload["workflow_id"])
             self.assertEqual(state_payload["project_id"], payload["project_id"])
+            self.assertEqual(state_payload["workflow_version"], 1)
             self.assertEqual(state_payload["phases"][0], {"id": "preflight", "status": "pending"})
 
             status = run_cli("status", "--project", str(project), env=env)
@@ -257,6 +258,174 @@ class GrillHarnessCliTests(unittest.TestCase):
             after = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
             self.assertEqual(after, before)
 
+    def test_init_rejects_manifest_that_contradicts_state_without_writes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            arguments = (
+                "init", "--project", str(project), "--workflow-name", "发布检查",
+                "--workflow-key", "release-check", "--created-date", "2026-07-12",
+            )
+            first = run_cli(*arguments, env=env)
+            workflow = Path(json.loads(first.stdout)["workflow_path"])
+            manifest = workflow / "系统" / "artifacts.yaml"
+            manifest.write_text(
+                '{"schema_version":1,"workflow_version":1,'
+                '"artifacts":[{"id":"ART-contradiction"}]}\n',
+                encoding="utf-8",
+            )
+            before = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
+
+            second = run_cli(*arguments, env=env)
+
+            self.assertEqual(second.returncode, 2)
+            payload = json.loads(second.stdout)
+            self.assertIn("contradicts", payload["error"]["message"])
+            after = {path: path.read_bytes() for path in workflow.rglob("*") if path.is_file()}
+            self.assertEqual(after, before)
+
+    def test_concurrent_init_preserves_every_project_index_record(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            processes = []
+            for number in range(12):
+                project = base / "project-{}".format(number)
+                project.mkdir()
+                processes.append(
+                    subprocess.Popen(
+                        [
+                            sys.executable, str(CLI), "init",
+                            "--project", str(project),
+                            "--workflow-name", "并发检查",
+                            "--workflow-key", "concurrent-{}".format(number),
+                            "--created-date", "2026-07-12",
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=env,
+                    )
+                )
+
+            results = [process.communicate(timeout=20) + (process.returncode,) for process in processes]
+
+            self.assertTrue(all(returncode == 0 for _, _, returncode in results), results)
+            index = json.loads((root / "项目索引.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(len(index["projects"]), 12)
+            self.assertEqual(len({item["project_id"] for item in index["projects"]}), 12)
+
+    def test_concurrent_init_of_same_workflow_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            command = [
+                sys.executable, str(CLI), "init",
+                "--project", str(project),
+                "--workflow-name", "同一工作流",
+                "--workflow-key", "same",
+                "--created-date", "2026-07-12",
+            ]
+            processes = [
+                subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                for _ in range(8)
+            ]
+
+            results = [process.communicate(timeout=20) + (process.returncode,) for process in processes]
+
+            self.assertTrue(all(code == 0 for _, _, code in results), results)
+            payloads = [json.loads(stdout) for stdout, _, _ in results]
+            self.assertEqual(sum(item["created"] for item in payloads), 1)
+            self.assertEqual(len({item["workflow_path"] for item in payloads}), 1)
+
+    def test_status_detects_state_and_manifest_divergence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            created = run_cli(
+                "init", "--project", str(project), "--workflow-name", "分叉检查",
+                "--workflow-key", "divergence", "--created-date", "2026-07-12",
+                env=env,
+            )
+            workflow = Path(json.loads(created.stdout)["workflow_path"])
+            (workflow / "系统" / "tasks.yaml").write_text(
+                '{"schema_version":1,"workflow_version":1,"tasks":[{"id":"TASK-X"}]}\n',
+                encoding="utf-8",
+            )
+
+            result = run_cli("status", "--project", str(project), env=env)
+
+            self.assertEqual(result.returncode, 1)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "recovery_required")
+            self.assertIn("MANIFEST_DIVERGENCE", {
+                item["code"] for item in payload["reconciliation"]["conflicts"]
+            })
+
+    def test_moved_git_repository_reuses_unique_stored_project(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            original = base / "original" / "project"
+            original.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", str(original)], check=True)
+            subprocess.run(["git", "-C", str(original), "config", "user.name", "Tests"], check=True)
+            subprocess.run(["git", "-C", str(original), "config", "user.email", "tests@example.com"], check=True)
+            subprocess.run(["git", "-C", str(original), "remote", "add", "origin", "https://github.com/example/project.git"], check=True)
+            (original / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(original), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(original), "commit", "-qm", "init"], check=True)
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            created = run_cli(
+                "init", "--project", str(original), "--workflow-name", "移动检查",
+                "--workflow-key", "move", "--created-date", "2026-07-12", env=env,
+            )
+            expected = json.loads(created.stdout)["workflow_path"]
+            moved = base / "moved" / "project"
+            moved.parent.mkdir()
+            original.rename(moved)
+
+            result = run_cli("status", "--project", str(moved), env=env)
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(json.loads(result.stdout)["workflow_path"], str(Path(expected) / "系统" / "state.yaml"))
+
+            second = run_cli(
+                "init", "--project", str(moved), "--workflow-name", "第二工作流",
+                "--workflow-key", "move-second", "--created-date", "2026-07-12",
+                env=env,
+            )
+
+            self.assertEqual(second.returncode, 0, second.stdout)
+            second_path = Path(json.loads(second.stdout)["workflow_path"])
+            self.assertEqual(second_path.parent, Path(expected).parent)
+            index = json.loads((root / "项目索引.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(len(index["projects"]), 1)
+            self.assertEqual(
+                index["projects"][0]["normalized_path"], str(moved.resolve())
+            )
+
     def test_init_rejects_invalid_created_date_as_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "project"
@@ -307,6 +476,37 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertEqual(payload["current_phase"], "alignment")
             self.assertEqual(payload["next_eligible_phase"], "alignment")
             self.assertTrue(payload["reconciliation"]["valid"])
+
+    def test_status_returns_machine_json_for_wrong_collection_type(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            workflow_path = Path(temp_dir) / "state.yaml"
+            workflow_path.write_text(
+                json.dumps(
+                    {
+                        "phases": None,
+                        "artifacts": [],
+                        "tasks": [],
+                        "evidence": [],
+                        "gates": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_cli(
+                "status", "--project", str(project), "--workflow", str(workflow_path)
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr, "")
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["status"], "recovery_required")
+            self.assertIn("INVALID_COLLECTION", {
+                item["code"] for item in payload["reconciliation"]["conflicts"]
+            })
 
     def test_status_blocks_guarded_current_phase_without_gate(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -443,20 +643,10 @@ class GrillHarnessCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             previous = Path(temp_dir) / "previous.json"
             facts = Path(temp_dir) / "facts.json"
-            manifest = {
-                "repository": "example/repo",
-                "ref": "main",
-                "commit": "abc",
-                "checked_at": "2026-07-11T00:00:00Z",
-                "upstream_updated_at": "2026-07-10T00:00:00Z",
-                "license": "MIT",
-                "source_paths": {"grilling": "skills/grilling/SKILL.md"},
-                "hashes": {"skills/grilling/SKILL.md": "hash-v1"},
-                "behavior_contracts": {"grilling": {"summary": "ask decisions"}},
-                "local_differences": [],
-                "risks": [],
-                "last_test_results": {"status": "passed"},
-            }
+            manifest = json.loads(
+                (REPO_ROOT / "skills" / "grill-harness" / "references" / "上游清单.yaml")
+                .read_text(encoding="utf-8")
+            )
             previous.write_text(json.dumps(manifest), encoding="utf-8")
             facts.write_text(
                 json.dumps(
@@ -465,19 +655,26 @@ class GrillHarnessCliTests(unittest.TestCase):
                         "ref": manifest["ref"],
                         "commit": manifest["commit"],
                         "upstream_updated_at": manifest["upstream_updated_at"],
+                        "upstream_release": manifest["upstream_release"],
                         "license": manifest["license"],
+                        "license_path": manifest["license_path"],
+                        "copyright": manifest["copyright"],
+                        "hash_algorithm": manifest["hash_algorithm"],
+                        "tracked_capabilities": manifest["tracked_capabilities"],
                         "sources": {
-                            "grilling": {
-                                "path": "skills/grilling/SKILL.md",
-                                "hash": "hash-v1",
+                            capability: {
+                                "path": path,
+                                "hash": manifest["hashes"][path],
                             }
+                            for capability, path in manifest["source_paths"].items()
                         },
-                        "behavior_contracts": {
-                            "grilling": {"summary": "ask decisions"}
-                        },
-                        "local_differences": [],
-                        "risks": [],
-                        "last_test_results": {"status": "passed"},
+                        "reference_files": manifest["reference_files"],
+                        "behavior_contracts": manifest["behavior_contracts"],
+                        "design_inputs": manifest["design_inputs"],
+                        "local_differences": manifest["local_differences"],
+                        "local_extension_points": manifest["local_extension_points"],
+                        "risks": manifest["risks"],
+                        "last_test_results": manifest["last_test_results"],
                     }
                 ),
                 encoding="utf-8",

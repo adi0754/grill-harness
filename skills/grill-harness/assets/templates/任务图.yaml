@@ -6,7 +6,7 @@
       "currentness": "current",
       "depends_on": [],
       "blockers": [],
-      "parallel_group": "",
+      "parallel_group": "serial-1",
       "trace_ids": ["REQ-001", "DEC-001", "CON-001"],
       "acceptance_ids": ["REQ-001", "DEC-001"],
       "allowed_paths": ["src/feature"],
@@ -18,8 +18,9 @@
       "git_baseline": "0000000000000000000000000000000000000000",
       "worktree": "/absolute/worktrees/TASK-001",
       "branch": "task/TASK-001",
-      "task_package_path": "/absolute/workflow/任务交接/TASK-001-实施任务.md",
-      "output_path": "/absolute/workflow/实施报告/TASK-001.md"
+      "task_package_path": "/absolute/home/.grill-harness/项目/x/工作流/y/过程产物/任务交接/TASK-001-实施任务.md",
+      "startup_prompt_path": "/absolute/home/.grill-harness/项目/x/工作流/y/过程产物/任务交接/TASK-001-启动提示词.md",
+      "output_path": "/absolute/home/.grill-harness/项目/x/工作流/y/过程产物/实施报告/TASK-001.md"
     }
   ]
 }

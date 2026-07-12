@@ -49,6 +49,7 @@ class PreflightTests(unittest.TestCase):
             root = Path(directory)
             global_skill = self._skill(root / "global", "grilling")
             project_skill = self._skill(root / "project", "domain-modeling")
+            self._skill(root / "project", "grill-with-docs")
             codebase_skill = self._skill(root / "global", "codebase-design")
             runner = FakeRunner(self._safe_cli_responses(
                 {"skills": [{"name": "domain-modeling", "path": str(project_skill)}]},
@@ -107,9 +108,49 @@ class PreflightTests(unittest.TestCase):
 
             self.assertTrue(report["ready"])
             self.assertFalse(report["cli"]["available"])
+            self.assertFalse(report["cli"]["complete"])
             self.assertEqual(report["install_commands"], [])
             self.assertTrue(all(item["scope"] == "global" for item in report["capabilities"] if item["verified"]))
             self.assertFalse(report["actions_performed"])
+
+    def test_partial_cli_failure_preserves_successful_scope_and_uses_filesystem_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_skill = self._skill(root / "project", "domain-modeling")
+            self._skill(root / "project", "grill-with-docs")
+            global_root = root / "global"
+            self._skill(global_root, "grilling")
+            self._skill(global_root, "codebase-design")
+            runner = FakeRunner({
+                ("npx", "skills", "list", "--json"): {
+                    "returncode": 0,
+                    "stdout": json.dumps({
+                        "skills": [{"name": "domain-modeling", "path": str(project_skill)}]
+                    }),
+                },
+                ("npx", "skills", "list", "-g", "--json"): {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "global inventory unavailable",
+                },
+            })
+
+            report = preflight.run_preflight(
+                skill_roots={
+                    "project": [root / "project"],
+                    "global": [global_root],
+                },
+                runner=runner,
+            )
+
+            self.assertTrue(report["ready"])
+            by_name = {item["name"]: item for item in report["capabilities"]}
+            self.assertEqual(by_name["domain-modeling"]["scope"], "project")
+            self.assertEqual(by_name["grilling"]["scope"], "global")
+            self.assertFalse(by_name["grill-with-docs"]["verified"])
+            self.assertTrue(report["cli"]["available"])
+            self.assertFalse(report["cli"]["complete"])
+            self.assertIn("global inventory unavailable", report["cli"]["error"])
 
     def test_missing_required_blocks_but_optional_and_reference_do_not(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -135,6 +176,8 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(len(report["install_commands"]), 1)
             self.assertIn("skills add mattpocock/skills", report["install_commands"][0])
             self.assertIn("codebase-design", report["install_commands"][0])
+            self.assertIn("-g -a codex claude-code", report["install_commands"][0])
+            self.assertIn("-y --copy", report["install_commands"][0])
             self.assertNotIn("requesting-code-review", report["install_commands"][0])
             self.assertEqual(
                 report["update_commands"],

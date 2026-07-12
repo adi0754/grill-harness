@@ -5,7 +5,9 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -162,6 +164,49 @@ def atomic_write_yaml(path: Path, data: Any) -> None:
                 pass
 
 
+@contextmanager
+def exclusive_directory_lock(path: Path, timeout_seconds: float = 5.0):
+    """Serialize a short critical section with an auto-released advisory lock."""
+
+    lock_path = Path(path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_seconds
+    with lock_path.open("a+b") as stream:
+        acquired = False
+        while not acquired:
+            try:
+                if _WINDOWS:
+                    import msvcrt
+
+                    stream.seek(0, os.SEEK_END)
+                    if stream.tell() == 0:
+                        stream.write(b"\0")
+                        stream.flush()
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except (BlockingIOError, OSError):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("timed out waiting for lock: {}".format(lock_path))
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            if _WINDOWS:
+                import msvcrt
+
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
 write_yaml_atomic = atomic_write_yaml
 
 
@@ -203,6 +248,7 @@ __all__ = [
     "backup_file",
     "ensure_storage_layout",
     "ensure_project_layout",
+    "exclusive_directory_lock",
     "get_storage_root",
     "initialize_storage",
     "load_yaml",

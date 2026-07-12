@@ -10,4 +10,8 @@ Update Options:
   -g, --global           Update global skills only
 
 Add Options:
+  -g, --global           Install skill globally
+  -a, --agent <agents>   Specify target agents
   -s, --skill <skills>   Specify skill names to install (use '*' for all skills)
+  -y, --yes              Skip confirmation prompts
+  --copy                 Copy files instead of symlinking

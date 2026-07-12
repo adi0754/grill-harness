@@ -3,7 +3,11 @@
   "ref": "main",
   "commit": "abc123",
   "upstream_updated_at": "2026-07-10T00:00:00Z",
+  "upstream_release": "1.0.0",
   "license": "MIT",
+  "license_path": "LICENSE",
+  "copyright": "Copyright (c) Example",
+  "hash_algorithm": "sha256",
   "sources": {
     "grilling": {"path": "skills/grilling/SKILL.md", "hash": "hash-grilling-v1"},
     "domain-modeling": {"path": "skills/domain-modeling/SKILL.md", "hash": "hash-domain-v1"},
@@ -11,12 +15,22 @@
     "grill-with-docs": {"path": "skills/grill-with-docs/SKILL.md", "hash": "hash-docs-v1"}
   },
   "behavior_contracts": {
-    "grilling": {"summary": "ask one decision question at a time"},
+    "grilling": {
+      "summary": "ask one decision question at a time",
+      "required_markers": ["one decision question at a time"],
+      "observations": {
+        "required_markers_present": {"one decision question at a time": true},
+        "frontmatter": {}
+      }
+    },
     "domain-modeling": {"summary": "sharpen canonical domain terms"},
     "codebase-design": {"summary": "design deep modules at explicit seams"},
     "grill-with-docs": {"summary": "reference documentation-producing grill flow"}
   },
+  "reference_files": {"LICENSE": "hash-license-v1"},
+  "design_inputs": ["one-question-at-a-time interview discipline"],
   "local_differences": ["Chinese compatibility report"],
+  "local_extension_points": ["remote facts loader"],
   "risks": [],
   "last_test_results": {"status": "passed", "checked_at": "2026-07-10T00:00:00Z"}
 }

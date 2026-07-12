@@ -82,6 +82,11 @@ WORKFLOW_PHASES = (
     "knowledge_archive",
 )
 
+# No canonical phase is optional in v1. Optional exploration is represented by
+# research/prototype artifacts inside the selected phase rather than by
+# relabelling a required phase at transition time.
+OPTIONAL_PHASES = frozenset()
+
 PHASE_GATE_REQUIREMENTS = {
     "preflight": None,
     "alignment": None,
@@ -632,6 +637,7 @@ __all__ = [
     "STATES",
     "StateContractError",
     "WORKFLOW_PHASES",
+    "OPTIONAL_PHASES",
     "WORKFLOW_STATES",
     "can_transition",
     "create_ledger_record",

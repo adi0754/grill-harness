@@ -53,6 +53,13 @@ class RouterScenarioEvidenceTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue((fixtures / name).is_file())
 
+    def test_committed_router_evidence_does_not_expose_personal_paths(self):
+        green = (ROUTER_DIR / "GREEN.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("/Users/", green)
+        self.assertNotIn("/home/", green)
+        self.assertNotIn("/tmp/grh-router-", green)
+
 
 if __name__ == "__main__":
     unittest.main()

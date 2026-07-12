@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/mattpocock/skills.git",
+  "ref": "main",
+  "commit": "391a2701dd948f94f56a39f7533f8eea9a859c87",
+  "checked_at": "2026-07-11T21:36:46Z",
+  "upstream_updated_at": "2026-07-10T13:14:59Z",
+  "upstream_release": "1.1.0",
+  "license": "MIT",
+  "license_path": "LICENSE",
+  "copyright": "Copyright (c) 2026 Matt Pocock",
+  "hash_algorithm": "sha256",
+  "tracked_capabilities": [
+    "codebase-design",
+    "domain-modeling",
+    "grill-with-docs",
+    "grilling"
+  ],
+  "source_paths": {
+    "codebase-design": "skills/engineering/codebase-design/SKILL.md",
+    "domain-modeling": "skills/engineering/domain-modeling/SKILL.md",
+    "grill-with-docs": "skills/engineering/grill-with-docs/SKILL.md",
+    "grilling": "skills/productivity/grilling/SKILL.md"
+  },
+  "source_urls": {
+    "codebase-design": "https://github.com/mattpocock/skills/blob/391a2701dd948f94f56a39f7533f8eea9a859c87/skills/engineering/codebase-design/SKILL.md",
+    "domain-modeling": "https://github.com/mattpocock/skills/blob/391a2701dd948f94f56a39f7533f8eea9a859c87/skills/engineering/domain-modeling/SKILL.md",
+    "grill-with-docs": "https://github.com/mattpocock/skills/blob/391a2701dd948f94f56a39f7533f8eea9a859c87/skills/engineering/grill-with-docs/SKILL.md",
+    "grilling": "https://github.com/mattpocock/skills/blob/391a2701dd948f94f56a39f7533f8eea9a859c87/skills/productivity/grilling/SKILL.md"
+  },
+  "hashes": {
+    ".claude-plugin/plugin.json": "df7b9a6084e376a346f9d55cfdb0487758f28e7e7a797af6c5de87e11c0cd26f",
+    "CHANGELOG.md": "e542f578f0626c8fe1afdb5ea778397f9e67e62babe5f3ce816b47595034d26b",
+    "LICENSE": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5",
+    "package.json": "bce70fe1a4fe94109c78b4a51824bacd33898287a6e14df40376dc6ea2d8edc8",
+    "skills/engineering/codebase-design/DEEPENING.md": "125e6b77413ad2bc7cf7a772bc74336d580a50f9e797db2178ed133d62333d06",
+    "skills/engineering/codebase-design/DESIGN-IT-TWICE.md": "21c3264953bd30ee87b181a3ccaf0e70649f461e5ffd7dc654acee4ba1788b31",
+    "skills/engineering/codebase-design/SKILL.md": "a8d50abac5a4018f60e1d911d4b6f4e36454ca14d6c390c0695a578c7de65dad",
+    "skills/engineering/domain-modeling/ADR-FORMAT.md": "f1f36cd3f8d3b6474ddd5855da4e233bfc4ae1a1c5024909ccf11871819a41b2",
+    "skills/engineering/domain-modeling/CONTEXT-FORMAT.md": "b8cc318f2a4285b530e908b6bc43901c3c5cd11100362636bbc4216639bef597",
+    "skills/engineering/domain-modeling/SKILL.md": "152e2c97239affb12a60c5f4a7e74ab546a49ae169688c81f4e2ccc42dafa579",
+    "skills/engineering/grill-with-docs/SKILL.md": "610d091047bcfb9db0f75c057d15538481a721111579fc5ec7f83ad9131a2165",
+    "skills/productivity/grilling/SKILL.md": "5a35925d03a391bcfa46940868b649b72dba89ec9c19525e785bbb6bd3a7f478"
+  },
+  "reference_files": {
+    ".claude-plugin/plugin.json": "df7b9a6084e376a346f9d55cfdb0487758f28e7e7a797af6c5de87e11c0cd26f",
+    "CHANGELOG.md": "e542f578f0626c8fe1afdb5ea778397f9e67e62babe5f3ce816b47595034d26b",
+    "LICENSE": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5",
+    "package.json": "bce70fe1a4fe94109c78b4a51824bacd33898287a6e14df40376dc6ea2d8edc8",
+    "skills/engineering/codebase-design/DEEPENING.md": "125e6b77413ad2bc7cf7a772bc74336d580a50f9e797db2178ed133d62333d06",
+    "skills/engineering/codebase-design/DESIGN-IT-TWICE.md": "21c3264953bd30ee87b181a3ccaf0e70649f461e5ffd7dc654acee4ba1788b31",
+    "skills/engineering/domain-modeling/ADR-FORMAT.md": "f1f36cd3f8d3b6474ddd5855da4e233bfc4ae1a1c5024909ccf11871819a41b2",
+    "skills/engineering/domain-modeling/CONTEXT-FORMAT.md": "b8cc318f2a4285b530e908b6bc43901c3c5cd11100362636bbc4216639bef597"
+  },
+  "behavior_contracts": {
+    "codebase-design": {
+      "summary": "提供 deep module、interface、seam、adapter、leverage 和 locality 的共享工程词汇，不争夺顶层流程控制权。",
+      "role": "required-capability",
+      "callable_dependency": true,
+      "required_markers": [
+        "Design **deep modules**",
+        "**Seam**",
+        "**Adapter**"
+      ],
+      "frontmatter_expectations": {"name": "codebase-design"},
+      "observations": {
+        "source_present": true,
+        "required_markers_present": {
+          "Design **deep modules**": true,
+          "**Seam**": true,
+          "**Adapter**": true
+        },
+        "frontmatter": {"name": "codebase-design"}
+      }
+    },
+    "domain-modeling": {
+      "summary": "主动维护领域词汇与稀疏 ADR，并要求用真实代码挑战口头领域陈述。",
+      "role": "required-capability",
+      "callable_dependency": true,
+      "required_markers": [
+        "Update CONTEXT.md inline",
+        "Offer ADRs sparingly",
+        "Cross-reference with code"
+      ],
+      "frontmatter_expectations": {"name": "domain-modeling"},
+      "observations": {
+        "source_present": true,
+        "required_markers_present": {
+          "Update CONTEXT.md inline": true,
+          "Offer ADRs sparingly": true,
+          "Cross-reference with code": true
+        },
+        "frontmatter": {"name": "domain-modeling"}
+      }
+    },
+    "grill-with-docs": {
+      "summary": "仅作为组合 grilling 与 domain-modeling 的上游兼容参考。",
+      "role": "compatibility-reference",
+      "callable_dependency": false,
+      "required_markers": [
+        "Run a `/grilling` session, using the `/domain-modeling` skill."
+      ],
+      "frontmatter_expectations": {
+        "name": "grill-with-docs",
+        "disable-model-invocation": true
+      },
+      "observations": {
+        "source_present": true,
+        "required_markers_present": {
+          "Run a `/grilling` session, using the `/domain-modeling` skill.": true
+        },
+        "frontmatter": {
+          "disable-model-invocation": true,
+          "name": "grill-with-docs"
+        }
+      }
+    },
+    "grilling": {
+      "summary": "一次只问一个决策问题；事实先查仓库；用户确认共同理解前不得实施。",
+      "role": "required-capability",
+      "callable_dependency": true,
+      "required_markers": [
+        "Ask the questions one at a time",
+        "If a *fact* can be found by exploring the codebase, look it up",
+        "Do not enact the plan until I confirm"
+      ],
+      "frontmatter_expectations": {"name": "grilling"},
+      "observations": {
+        "source_present": true,
+        "required_markers_present": {
+          "Ask the questions one at a time": true,
+          "If a *fact* can be found by exploring the codebase, look it up": true,
+          "Do not enact the plan until I confirm": true
+        },
+        "frontmatter": {"name": "grilling"}
+      }
+    }
+  },
+  "design_inputs": [
+    "grilling 的逐问决策纪律与先查事实原则",
+    "domain-modeling 的领域语言、代码交叉检查与稀疏 ADR 原则",
+    "codebase-design 的深模块与 seam 词汇",
+    "grill-with-docs 的组合关系与仅用户调用约束"
+  ],
+  "local_differences": [
+    "Grill Harness 自己掌握路线选择、状态机、任务图、角色交接、独立审查与验收。",
+    "领域和决策文档写入 ~/.grill-harness/，不写入项目仓库的 CONTEXT.md 或 docs/adr。",
+    "grill-with-docs 仅用于兼容观察，不作为可调用依赖。",
+    "codebase-design 是 Grill Harness 主动选择的必需能力，不是 grill-with-docs 的传递依赖。"
+  ],
+  "local_extension_points": [
+    "依赖预检适配器",
+    "只读远程事实加载器",
+    "行为契约 marker",
+    "兼容性分类与升级建议",
+    "上游检查后的本地兼容性测试入口"
+  ],
+  "risks": [
+    "main 分支可能领先于发布版本，兼容判断以 commit 和文件哈希为准。",
+    "纯文本 marker 只能发现已声明契约的机械变化，语义变化仍需人工复核。",
+    "上游路径删除或重命名不得被当作普通网络失败。",
+    "复制或实质改写上游内容时必须保留 MIT 许可证要求的版权与许可声明。"
+  ],
+  "last_test_results": {
+    "status": "passed",
+    "checked_at": "2026-07-11T21:36:46Z",
+    "evidence": "commit、路径、内容 SHA-256 与 LICENSE 由隔离只读 clone 交叉核验。"
+  }
+}

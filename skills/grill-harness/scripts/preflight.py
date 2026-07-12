@@ -41,6 +41,9 @@ def _entries(payload):
 
 def _cli_inventory(runner):
     inventory = []
+    errors = []
+    failed_scopes = []
+    successes = 0
     commands = (
         (["npx", "skills", "list", "--json"], "project"),
         (["npx", "skills", "list", "-g", "--json"], "global"),
@@ -49,18 +52,34 @@ def _cli_inventory(runner):
         try:
             response = runner(command)
         except (FileNotFoundError, OSError) as error:
-            return False, [], str(error)
+            errors.append("{}: {}".format(scope, error))
+            failed_scopes.append(scope)
+            continue
         if not response or response.get("returncode") != 0:
-            return False, [], (response or {}).get("stderr", "skills CLI failed")
+            errors.append(
+                "{}: {}".format(
+                    scope, (response or {}).get("stderr", "skills CLI failed")
+                )
+            )
+            failed_scopes.append(scope)
+            continue
         try:
             payload = json.loads(response.get("stdout", ""))
         except (TypeError, json.JSONDecodeError) as error:
-            return False, [], "invalid CLI JSON: {}".format(error)
+            errors.append("{}: invalid CLI JSON: {}".format(scope, error))
+            failed_scopes.append(scope)
+            continue
+        successes += 1
         for entry in _entries(payload):
             normalized = dict(entry)
             normalized["scope"] = scope
             inventory.append(normalized)
-    return True, inventory, None
+    return (
+        successes == len(commands),
+        inventory,
+        "; ".join(errors) or None,
+        tuple(failed_scopes),
+    )
 
 
 def _filesystem_inventory(roots):
@@ -126,9 +145,13 @@ def _batch_command(help_text, capabilities):
     if not help_text or not capabilities:
         return None
     has_add_source = re.search(r"(?m)^\s*add\s+<(?:source|package)>(?=\s|$)", help_text)
-    if not has_add_source or "--skill" not in help_text:
+    required_flags = ("--global", "--agent", "--skill", "--yes", "--copy")
+    if not has_add_source or any(flag not in help_text for flag in required_flags):
         return None
-    return "npx skills add mattpocock/skills --skill {}".format(" ".join(capabilities))
+    return (
+        "npx skills add mattpocock/skills -g -a codex claude-code "
+        "-s {} -y --copy"
+    ).format(" ".join(capabilities))
 
 
 def _update_command(help_text, capabilities):
@@ -147,8 +170,17 @@ def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
     """Discover, verify, and report capabilities without changing the system."""
 
     runner = _default_runner if runner is None else runner
-    cli_available, cli_entries, cli_error = _cli_inventory(runner)
-    inventory = cli_entries if cli_available else _filesystem_inventory(skill_roots)
+    cli_complete, cli_entries, cli_error, failed_scopes = _cli_inventory(runner)
+    cli_available = cli_complete or bool(cli_entries)
+    inventory = list(cli_entries)
+    if not cli_complete:
+        fallback_roots = skill_roots
+        if isinstance(skill_roots, dict) and failed_scopes:
+            fallback_roots = {
+                scope: skill_roots.get(scope, ())
+                for scope in failed_scopes
+            }
+        inventory.extend(_filesystem_inventory(fallback_roots))
     names = list(REQUIRED_CAPABILITIES) + list(optional_capabilities) + list(COMPATIBILITY_REFERENCES)
     capabilities = []
     for name in names:
@@ -176,7 +208,12 @@ def run_preflight(skill_roots=(), runner=None, optional_capabilities=()):
         update_commands = [update] if update else []
     return {
         "ready": not missing_required,
-        "cli": {"available": cli_available, "error": cli_error, "inventory_source": "json-first"},
+        "cli": {
+            "available": cli_available,
+            "complete": cli_complete,
+            "error": cli_error,
+            "inventory_source": "json-first",
+        },
         "capabilities": capabilities,
         "missing_required": missing_required,
         "missing_optional": missing_optional,

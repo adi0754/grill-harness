@@ -1,4 +1,4 @@
 interface:
   display_name: "Grill Harness"
-  short_description: "单入口、可恢复、可升级、支持多角色协作的软件工程工作流控制台"
-  default_prompt: "使用 $grill-harness 开始、继续、恢复或检查一个软件工程工作流。"
+  short_description: "规划、拆分、实施、审查与验收的可恢复工程工作流"
+  default_prompt: "使用 $grill-harness 从真实仓库和持久化状态开始或继续这项软件工程工作；先判断当前阶段与门禁，不要过早编码。"
