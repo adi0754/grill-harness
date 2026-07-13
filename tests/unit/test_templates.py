@@ -219,6 +219,69 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("不会安装或更新", readme)
         self.assertNotIn("合并三个门禁", readme)
 
+    def test_human_facing_workflow_explanations_are_enforced(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for marker in (
+            "## 30 秒理解",
+            "Harness 负责",
+            "Agent 负责",
+            "用户负责",
+            "```mermaid",
+            "## 需求雷达实际在问什么",
+            "我们理解的是不是同一个需求",
+            "这些可行路线中，我选择哪一条",
+            "这份实施合同是否足以授权写代码",
+        ):
+            self.assertIn(marker, readme)
+
+        main_skill = MAIN_SKILL.read_text(encoding="utf-8")
+        for marker in (
+            "面向用户的沟通协议",
+            "30 秒结论",
+            "Harness 维护状态",
+            "需求理解是否一致",
+        ):
+            self.assertIn(marker, main_skill)
+
+        stage = (REFERENCES / "阶段执行协议.md").read_text(encoding="utf-8")
+        for marker in (
+            "机器 JSON、稳定 ID、产物版本和命令是证据，不是主要叙事",
+            "谁在什么条件下，要得到什么结果",
+            "正常路径之外",
+            "改动会沿调用方",
+            "哪些能复用、哪些必须隔离",
+        ):
+            self.assertIn(marker, stage)
+
+        state_machine = (REFERENCES / "工作流状态机.md").read_text(encoding="utf-8")
+        for question in (
+            "我们理解的是不是同一个需求",
+            "这些可行路线中选择哪一条",
+            "这份实施合同是否足以授权写代码",
+        ):
+            self.assertIn(question, state_machine)
+
+        radar = self.read("需求雷达.md")
+        self.assertIn("## 30 秒结论", radar)
+        self.assertIn("## 给用户看的五个问题", radar)
+
+        start_skill = (ROOT / "skills" / "grh-start" / "SKILL.md").read_text(encoding="utf-8")
+        plan_skill = (ROOT / "skills" / "grh-plan" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("五个自然语言问题", start_skill)
+        self.assertIn("这份实施合同是否足以授权写代码", plan_skill)
+
+        for entry in (
+            "grh-start",
+            "grh-plan",
+            "grh-run",
+            "grh-check",
+            "grh-recover",
+            "grh-learn",
+            "grh-upstream-check",
+        ):
+            thin_skill = (ROOT / "skills" / entry / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("完整读取其 `SKILL.md`", thin_skill, entry)
+
     def test_route_card_stops_before_selection_and_repository_challenge_is_conclusive(self):
         route = self.read("路线卡.md")
         self.assertIn("选择前停止", route)

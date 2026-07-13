@@ -1,4 +1,4 @@
 interface:
   display_name: "GRH Start"
   short_description: "澄清需求、建立基线并选择路线"
-  default_prompt: "使用 $grh-start 从真实仓库开始；先核验主内核和入口资格，在用户选择路线后停止。"
+  default_prompt: "使用 $grh-start 从真实仓库开始；用五个自然语言问题解释需求雷达和两个门禁，在用户选择路线后停止。"

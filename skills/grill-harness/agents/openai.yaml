@@ -1,4 +1,4 @@
 interface:
   display_name: "Grill Harness"
   short_description: "规划、拆分、实施、审查与验收的可恢复工程工作流"
-  default_prompt: "使用 $grill-harness 从真实仓库和持久化状态开始或继续这项软件工程工作；先判断当前阶段与门禁，不要过早编码。"
+  default_prompt: "使用 $grill-harness 从真实仓库和持久化状态开始或继续；先用 30 秒结论说明当前阶段、人机职责和推荐下一步，再按真实门禁推进，不要过早编码。"

@@ -12,7 +12,7 @@ description: Use when an approved final specification is ready for task packagin
 - 禁止：切换路线、最终验收、自动串联下一入口。
 - 停止：最终验收前停止；路线问题转由用户选择 `grh-recover`。
 
-先通过 Agent Skill 元数据、`npx skills list --json` / `npx skills list -g --json` 和真实安装目录发现名为 `grill-harness` 的主内核；校验其 `SKILL.md` frontmatter、`scripts/grh.py` 与 `references/入口内核契约.json`。不要假设主内核位于固定兄弟目录。
+先通过 Agent Skill 元数据、`npx skills list --json` / `npx skills list -g --json` 和真实安装目录发现名为 `grill-harness` 的主内核；完整读取其 `SKILL.md`，并校验 frontmatter、`scripts/grh.py` 与 `references/入口内核契约.json`。不要假设主内核位于固定兄弟目录。
 
 找到内核后运行 `python3 <主内核>/scripts/grh.py entry-check --entry grh-run --project <项目绝对路径>`，用户范围更窄时追加 `--requested-scope`。资格检查通过后只按主内核契约执行允许范围。
 
