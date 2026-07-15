@@ -161,7 +161,6 @@ class RuntimeEvidenceSanitizationTests(unittest.TestCase):
         ).stdout.split(b"\0")
         allowed = {
             Path("skills/grill-harness/assets/templates/任务图.yaml"),
-            Path("task-9-report.md"),
             Path("tests/unit/test_runtime_safety.py"),
         }
         patterns = {

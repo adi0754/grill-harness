@@ -9,7 +9,6 @@ TEMPLATES = ROOT / "skills" / "grill-harness" / "assets" / "templates"
 REFERENCES = ROOT / "skills" / "grill-harness" / "references"
 SCRIPTS = ROOT / "skills" / "grill-harness" / "scripts"
 MAIN_SKILL = ROOT / "skills" / "grill-harness" / "SKILL.md"
-ACCEPTANCE_PROMPT = ROOT / "docs" / "acceptance-prompt-v2.md"
 sys.path.insert(0, str(SCRIPTS))
 
 import state
@@ -129,19 +128,6 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("仍分别批准", text)
         self.assertNotIn("可合并为一次明确授权", text)
         self.assertIn("预批", text)
-
-    def test_acceptance_prompt_isolates_python_and_runtime_writes(self):
-        text = ACCEPTANCE_PROMPT.read_text(encoding="utf-8")
-        for marker in (
-            "ACCEPT_TMP=$(mktemp -d",
-            'export HOME="$ACCEPT_TMP/home"',
-            'export CODEX_HOME="$ACCEPT_TMP/codex-home"',
-            'export XDG_CONFIG_HOME="$ACCEPT_TMP/xdg-config"',
-            'export XDG_DATA_HOME="$ACCEPT_TMP/xdg-data"',
-            'export GRILL_HARNESS_TEST_ROOT="$ACCEPT_TMP/runtime"',
-            'export PYTHONPYCACHEPREFIX="$ACCEPT_TMP/pycache"',
-        ):
-            self.assertIn(marker, text)
 
     def test_v2_workflow_references_document_the_enforced_runtime_contract(self):
         state_machine = (REFERENCES / "工作流状态机.md").read_text(encoding="utf-8")
