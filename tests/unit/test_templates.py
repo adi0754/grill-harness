@@ -208,27 +208,26 @@ class TemplateContractTests(unittest.TestCase):
             self.assertIn(entry, readme)
         self.assertIn("-s '*'", readme)
         self.assertIn("缺少主内核", readme)
-        self.assertIn("knowledge-query", readme)
-        self.assertIn("knowledge-draft", readme)
-        self.assertIn("knowledge-promote", readme)
+        self.assertIn("草稿", readme)
         self.assertIn("项目知识", readme)
         self.assertIn("通用知识", readme)
+        self.assertIn("第二次独立批准", readme)
         self.assertIn("只读", readme)
-        self.assertIn("不会安装或更新", readme)
+        self.assertIn("不安装、不更新", readme)
         self.assertNotIn("合并三个门禁", readme)
 
     def test_human_facing_workflow_explanations_are_enforced(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for marker in (
-            "## 30 秒理解",
+            "## 为什么值得一试",
             "Harness 负责",
-            "Agent 负责",
-            "用户负责",
+            "模型在授权范围内",
+            "你负责",
             "```mermaid",
-            "## 需求雷达实际在问什么",
+            "需求雷达具体在替你问什么",
             "我们理解的是不是同一个需求",
-            "这些可行路线中，我选择哪一条",
-            "这份实施合同是否足以授权写代码",
+            "这几条可行路线里，我选哪一条",
+            "这份实施合同能不能授权写代码",
         ):
             self.assertIn(marker, readme)
 
