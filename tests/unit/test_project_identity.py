@@ -174,6 +174,23 @@ class ProjectIdentityTests(unittest.TestCase):
             )
             self.assertEqual(len(original_identity.history_roots), 2)
 
+    def test_stash_with_untracked_files_does_not_change_project_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = create_repository(Path(temp_dir) / "project")
+            before = state.identify_project(repo)
+
+            (repo / "untracked.txt").write_text("temporary\n", encoding="utf-8")
+            run_git(repo, "stash", "push", "--include-untracked", "-m", "temporary")
+
+            all_roots = run_git(
+                repo, "rev-list", "--max-parents=0", "--all"
+            ).splitlines()
+            after = state.identify_project(repo)
+
+            self.assertGreater(len(all_roots), len(before.history_roots))
+            self.assertEqual(before.project_id, after.project_id)
+            self.assertEqual(before.history_roots, after.history_roots)
+
     def test_windows_paths_are_normalized_without_using_the_process_cwd(self):
         self.assertEqual(
             state.normalize_project_path(r"C:\Users\Alice\Project\..\Repo"),

@@ -12,6 +12,7 @@ named in `docs/design.md` section 21.2:
 7. 切片质量
 8. diff 审查
 9. 证据结论
+10. 对人首段为明白中文
 
 Allowed values are `通过`, `失败`, `不适用`, and `未验证`. The design does not
 define numeric weights or a pass threshold, so these tests do not invent a

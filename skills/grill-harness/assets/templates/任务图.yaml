@@ -1,4 +1,10 @@
 {
+  "decomposition": {
+    "slice_count": 1,
+    "blocking_edges": [],
+    "frontier": ["TASK-001"],
+    "non_split_reason": "单任务覆盖全部 REQ 时，说明为何它仍能在一个新会话内独立验证；多任务时填写不适用"
+  },
   "tasks": [
     {
       "id": "TASK-001",

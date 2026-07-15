@@ -78,7 +78,7 @@
       "kind": "situational-entry",
       "allowed_phases": ["alignment", "route_selection", "repository_challenge", "specification", "implementation", "independent_assurance"],
       "required_gates": [],
-      "allowed_operations": ["diagnose_drift", "reconcile", "propose_route"],
+      "allowed_operations": ["diagnose_drift", "reconcile", "invalidate_phase_chain", "propose_route"],
       "forbidden_operations": ["auto_switch_route", "auto_route"],
       "stop_boundary": "Stop and wait for user confirmation before changing route.",
       "next_entry_suggestions": ["grh-start", "grh-plan", "grh-run", "grh-check"],

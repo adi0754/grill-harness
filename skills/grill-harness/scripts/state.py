@@ -594,7 +594,16 @@ def _git_facts(path: Path) -> Optional[Dict[str, Any]]:
         if remotes:
             first_remote = sorted(remotes.splitlines())[0]
             remote = _run_git(Path(root), "remote", "get-url", first_remote)
-    history = _run_git(Path(root), "rev-list", "--max-parents=0", "--all")
+    # refs/stash can introduce synthetic roots for untracked files. Project
+    # identity must follow durable branch history instead of transient stash state.
+    history = _run_git(
+        Path(root),
+        "rev-list",
+        "--max-parents=0",
+        "--branches",
+        "--remotes",
+        "HEAD",
+    )
     history_roots = tuple(sorted(history.splitlines())) if history else ()
     return {
         "path": normalized_root,

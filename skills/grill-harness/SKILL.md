@@ -20,7 +20,7 @@ description: Use as the Grill Harness router when the user asks for workflow sta
 
 `status` 返回的状态、门禁和 `next_eligible_phase` 是路由依据。退出码 `1` 表示策略阻塞，`2` 表示输入或 I/O 失败；停止并原样报告 JSON，不推测成功。前一位 Agent 的总结不是事实或门禁证据。Router 本身不初始化、不迁移状态，也不执行完整阶段。
 
-执行入口后若需变更机器状态，只能按主内核使用 `record`、`approve`、`transition`、`migrate`、`rollback` 等受保护命令。不要手工改写系统清单后继续执行。
+执行入口后若需变更机器状态，只能按主内核使用 `record`、`approve`、`transition`、`invalidate-chain`、`migrate`、`rollback` 等受保护命令。不要手工改写系统清单后继续执行。
 
 ## 面向用户的沟通协议
 

@@ -49,6 +49,127 @@ class WorkflowOperationTests(unittest.TestCase):
         )
         return env, Path(json.loads(result.stdout)["workflow_path"])
 
+    def _baseline_reuse_case(
+        self,
+        base,
+        *,
+        include_related_change=True,
+        prior_workflow_id=None,
+        route_invalidated=False,
+        product_change=False,
+    ):
+        env, workflow = self._workflow(base)
+        project = base / "project"
+        state_path = workflow / "系统" / "state.yaml"
+        initial = json.loads(state_path.read_text(encoding="utf-8"))
+        workflow_id = initial["workflow_id"]
+
+        prior_record = workflow / "系统" / "prior-baseline-approval.yaml"
+        prior_record.write_text(
+            json.dumps(
+                {
+                    "id": "CHG-001",
+                    "type": "CHG",
+                    "version": 1,
+                    "status": "approved",
+                    "summary": "用户批准忽略 owner worktree changes",
+                    "approved_by": "user",
+                    "operation": "baseline_reconcile",
+                    "workflow_id": prior_workflow_id or workflow_id,
+                    "ignore_owner_worktree_changes": True,
+                    "route_invalidated": False,
+                    "product_change": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        prior_registered = run_cli(
+            "record",
+            "--workflow",
+            str(workflow),
+            "--kind",
+            "ledger",
+            "--record",
+            str(prior_record),
+            env=env,
+        )
+
+        reuse_payload = {
+            "id": "CHG-002",
+            "type": "CHG",
+            "version": 1,
+            "status": "approved",
+            "summary": "复用已批准的 owner baseline 忽略策略",
+            "approval_source": "related_change",
+            "operation": "baseline_reconcile",
+            "workflow_id": workflow_id,
+            "ignore_owner_worktree_changes": True,
+            "route_invalidated": route_invalidated,
+            "product_change": product_change,
+        }
+        if include_related_change:
+            reuse_payload["related_change"] = "CHG-001"
+        reuse_record = workflow / "系统" / "reused-baseline-approval.yaml"
+        reuse_record.write_text(json.dumps(reuse_payload), encoding="utf-8")
+        reuse_registered = run_cli(
+            "record",
+            "--workflow",
+            str(workflow),
+            "--kind",
+            "ledger",
+            "--record",
+            str(reuse_record),
+            env=env,
+        )
+
+        output = workflow / "过程产物" / "恢复对账" / "reuse.log"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("reuse baseline evidence\n", encoding="utf-8")
+        evidence = workflow / "系统" / "reused-baseline-evidence.yaml"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "id": "EVD-REUSE",
+                    "status": "valid",
+                    "currentness": "current",
+                    "command": "verify reused owner baseline policy",
+                    "working_directory": str(project),
+                    "exit_code": 0,
+                    "baseline": initial["git_baseline"],
+                    "producer": "recovery-verifier",
+                    "reproducible": True,
+                    "requirements": [],
+                    "decisions": ["CHG-002"],
+                    "tasks": [],
+                    "issues": [],
+                    "executed_at": "2026-07-15T09:00:00+08:00",
+                    "validated_at": "2026-07-15T09:01:00+08:00",
+                    "expires_at": "2099-07-15T09:01:00+08:00",
+                    "output_path": str(output),
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = run_cli(
+            "baseline-reconcile",
+            "--workflow",
+            str(workflow),
+            "--project",
+            str(project),
+            "--evidence-record",
+            str(evidence),
+            "--approval-id",
+            "CHG-002",
+            env=env,
+        )
+        return {
+            "workflow": workflow,
+            "state_path": state_path,
+            "prior_registered": prior_registered,
+            "reuse_registered": reuse_registered,
+            "result": result,
+        }
+
     def test_record_gate_and_transition_are_guarded_and_sync_manifests(self):
         with tempfile.TemporaryDirectory() as directory:
             env, workflow = self._workflow(Path(directory))
@@ -301,6 +422,506 @@ class WorkflowOperationTests(unittest.TestCase):
                 "does not own",
                 json.loads(cross_project.stdout)["error"]["message"],
             )
+
+    def test_baseline_reconcile_atomically_rebinds_entered_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env, workflow = self._workflow(base)
+            project = base / "project"
+            state_path = workflow / "系统" / "state.yaml"
+            initial = json.loads(state_path.read_text(encoding="utf-8"))
+            initial_baseline = initial["git_baseline"]
+
+            old_output = workflow / "过程产物" / "恢复对账" / "old.log"
+            old_output.parent.mkdir(parents=True, exist_ok=True)
+            old_output.write_text("old\n", encoding="utf-8")
+            old_evidence = workflow / "系统" / "old-evidence.yaml"
+            old_evidence.write_text(
+                json.dumps({
+                    "id": "EVD-OLD",
+                    "status": "valid",
+                    "currentness": "current",
+                    "command": "old verification",
+                    "working_directory": str(project),
+                    "exit_code": 0,
+                    "baseline": initial_baseline,
+                    "producer": "verifier",
+                    "reproducible": True,
+                    "requirements": ["REQ-001"],
+                    "decisions": [],
+                    "tasks": [],
+                    "issues": [],
+                    "executed_at": "2026-07-12T08:00:00+08:00",
+                    "validated_at": "2026-07-12T08:01:00+08:00",
+                    "expires_at": "2099-07-12T08:01:00+08:00",
+                    "output_path": str(old_output),
+                }),
+                encoding="utf-8",
+            )
+            old_registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "evidence",
+                "--record", str(old_evidence), "--project", str(project), env=env,
+            )
+            phase_started = run_cli(
+                "transition", "--workflow", str(workflow), "--phase", "preflight",
+                "--to", "in_progress", "--evidence", "EVD-OLD", env=env,
+            )
+
+            package = workflow / "过程产物" / "任务交接" / "TASK-001-实施任务.md"
+            package.parent.mkdir(parents=True, exist_ok=True)
+            package.write_text("task package\n", encoding="utf-8")
+            startup = workflow / "过程产物" / "任务交接" / "TASK-001-启动提示词.md"
+            startup.write_text("read task package\n", encoding="utf-8")
+            report = workflow / "过程产物" / "实施报告" / "TASK-001.md"
+            task_record = workflow / "系统" / "task-record.yaml"
+            task_record.write_text(
+                json.dumps({
+                    "id": "TASK-001",
+                    "status": "pending",
+                    "currentness": "current",
+                    "parallel_group": "serial-1",
+                    "depends_on": [],
+                    "blockers": [],
+                    "trace_ids": ["REQ-001", "DEC-001"],
+                    "acceptance_ids": ["REQ-001"],
+                    "allowed_paths": ["src"],
+                    "forbidden_paths": ["secrets"],
+                    "write_paths": ["src"],
+                    "shared_contracts": [],
+                    "migrations": [],
+                    "generated_files": [],
+                    "git_baseline": initial_baseline,
+                    "worktree": str(project),
+                    "branch": "task/TASK-001",
+                    "task_package_path": str(package),
+                    "startup_prompt_path": str(startup),
+                    "output_path": str(report),
+                    "review_required": True,
+                    "review_history": [],
+                    "review": {
+                        "status": "pending",
+                        "goals_satisfied": False,
+                        "test_evidence_satisfied": False,
+                        "unresolved_route_issue": False,
+                        "comments": [],
+                    },
+                }),
+                encoding="utf-8",
+            )
+            task_registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "task",
+                "--record", str(task_record), env=env,
+            )
+            task_started = run_cli(
+                "task-transition", "--workflow", str(workflow), "--task", "TASK-001",
+                "--to", "in_progress", "--project", str(project), env=env,
+            )
+
+            approval_record = workflow / "系统" / "approval.yaml"
+            approval_record.write_text(
+                json.dumps({
+                    "id": "CHG-001",
+                    "type": "CHG",
+                    "version": 1,
+                    "status": "approved",
+                    "summary": "Ignore owner worktree changes for baseline recovery",
+                    "approved_by": "user",
+                    "operation": "baseline_reconcile",
+                    "workflow_id": initial["workflow_id"],
+                    "ignore_owner_worktree_changes": True,
+                }),
+                encoding="utf-8",
+            )
+            approval_registered = run_cli(
+                "record", "--workflow", str(workflow), "--kind", "ledger",
+                "--record", str(approval_record), env=env,
+            )
+
+            (project / "later.txt").write_text("later\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(project), "add", "later.txt"], check=True)
+            subprocess.run(
+                ["git", "-C", str(project), "commit", "-qm", "later"], check=True,
+            )
+            (project / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(project), "add", "dirty.txt"], check=True)
+            current_baseline = state.current_project_baseline(project)
+
+            recovery_output = workflow / "过程产物" / "恢复对账" / "current.log"
+            recovery_output.write_text("current\n", encoding="utf-8")
+            recovery_evidence = workflow / "系统" / "recovery-evidence.yaml"
+            recovery_evidence.write_text(
+                json.dumps({
+                    "id": "EVD-NEW",
+                    "status": "valid",
+                    "currentness": "current",
+                    "command": "current verification",
+                    "working_directory": str(project),
+                    "exit_code": 0,
+                    "baseline": current_baseline,
+                    "producer": "recovery-verifier",
+                    "reproducible": True,
+                    "requirements": ["REQ-001"],
+                    "decisions": ["CHG-001"],
+                    "tasks": ["TASK-001"],
+                    "issues": [],
+                    "executed_at": "2026-07-12T09:00:00+08:00",
+                    "validated_at": "2026-07-12T09:01:00+08:00",
+                    "expires_at": "2099-07-12T09:01:00+08:00",
+                    "output_path": str(recovery_output),
+                }),
+                encoding="utf-8",
+            )
+            reconciled = run_cli(
+                "baseline-reconcile", "--workflow", str(workflow),
+                "--project", str(project), "--evidence-record", str(recovery_evidence),
+                "--approval-id", "CHG-001", "--task", "TASK-001", env=env,
+            )
+            verified = run_cli(
+                "reconcile", "--workflow", str(workflow), "--project", str(project),
+                env=env,
+            )
+
+            for result in (
+                old_registered,
+                phase_started,
+                task_registered,
+                task_started,
+                approval_registered,
+                reconciled,
+                verified,
+            ):
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            updated = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["git_baseline"], current_baseline)
+            self.assertEqual(updated["phases"][0]["evidence"], ["EVD-NEW"])
+            task = next(item for item in updated["tasks"] if item["id"] == "TASK-001")
+            self.assertEqual(task["git_baseline"], current_baseline)
+            self.assertEqual(task["baseline_reconciled_from"], initial_baseline)
+            self.assertEqual(
+                [item["id"] for item in updated["evidence"]],
+                ["EVD-OLD", "EVD-NEW"],
+            )
+
+    def test_baseline_reconcile_reuses_prior_user_approved_policy_in_same_workflow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = self._baseline_reuse_case(Path(directory))
+
+            self.assertEqual(case["prior_registered"].returncode, 0)
+            self.assertEqual(case["reuse_registered"].returncode, 0)
+            self.assertEqual(case["result"].returncode, 0, case["result"].stdout)
+            updated = json.loads(case["state_path"].read_text(encoding="utf-8"))
+            self.assertIn("CHG-002", [item["id"] for item in updated["ledger"]])
+            self.assertIn("EVD-REUSE", [item["id"] for item in updated["evidence"]])
+            reconciliation = updated["baseline_reconciliations"][-1]
+            self.assertEqual(reconciliation["approval_id"], "CHG-002")
+            self.assertEqual(reconciliation["reused_approval_id"], "CHG-001")
+
+    def test_baseline_reconcile_reuse_rejects_missing_related_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = self._baseline_reuse_case(
+                Path(directory), include_related_change=False,
+            )
+
+            self.assertEqual(case["result"].returncode, 2, case["result"].stdout)
+            self.assertIn(
+                "durable user approval",
+                json.loads(case["result"].stdout)["error"]["message"],
+            )
+
+    def test_baseline_reconcile_reuse_rejects_cross_workflow_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = self._baseline_reuse_case(
+                Path(directory), prior_workflow_id="foreign-workflow",
+            )
+
+            self.assertEqual(case["result"].returncode, 2, case["result"].stdout)
+            self.assertIn(
+                "current workflow",
+                json.loads(case["result"].stdout)["error"]["message"],
+            )
+
+    def test_baseline_reconcile_reuse_rejects_invalidated_route(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = self._baseline_reuse_case(
+                Path(directory), route_invalidated=True,
+            )
+
+            self.assertEqual(case["result"].returncode, 2, case["result"].stdout)
+            self.assertIn(
+                "route_invalidated",
+                json.loads(case["result"].stdout)["error"]["message"],
+            )
+
+    def test_baseline_reconcile_reuse_rejects_product_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case = self._baseline_reuse_case(
+                Path(directory), product_change=True,
+            )
+
+            self.assertEqual(case["result"].returncode, 2, case["result"].stdout)
+            self.assertIn(
+                "product_change",
+                json.loads(case["result"].stdout)["error"]["message"],
+            )
+
+    def test_invalidate_chain_atomically_reopens_approved_change_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env, workflow = self._workflow(base)
+            project = base / "project"
+            state_path = workflow / "系统" / "state.yaml"
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            payload.pop("schema_version", None)
+            baseline = payload["git_baseline"]
+
+            artifact_specs = {
+                "ART-EARLY": ("phase-report", workflow / "过程产物" / "早期阶段.md"),
+                "ART-BASELINE": (
+                    "requirements-baseline",
+                    workflow / "核心文档" / "需求基线.md",
+                ),
+                "ART-ROUTE": (
+                    "route-selection",
+                    workflow / "过程产物" / "路线评估" / "路线-A.md",
+                ),
+                "ART-SPEC": ("specification", workflow / "过程产物" / "规格草案.md"),
+                "ART-FINAL": ("final-spec", workflow / "最终产物" / "最终规格.md"),
+                "ART-TASKING": ("tasking", workflow / "过程产物" / "任务拆分.md"),
+                "ART-IMPL": ("implementation", workflow / "过程产物" / "实施报告.md"),
+                "ART-ASSURE": ("assurance", workflow / "过程产物" / "验收报告.md"),
+            }
+            artifacts = []
+            for artifact_id, (kind, path) in artifact_specs.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(artifact_id + "\n", encoding="utf-8")
+                artifacts.append({
+                    "id": artifact_id,
+                    "kind": kind,
+                    "version": 1,
+                    "status": "completed",
+                    "currentness": "current",
+                    "path": str(path),
+                    "decisions": {
+                        "ART-BASELINE": ["DEC-005"],
+                        "ART-ROUTE": ["DEC-006"],
+                        "ART-FINAL": ["DEC-009"],
+                    }.get(artifact_id, []),
+                })
+
+            def evidence_record(evidence_id, tasks=()):
+                output = workflow / "过程产物" / "证据" / (evidence_id + ".log")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("ok\n", encoding="utf-8")
+                return {
+                    "id": evidence_id,
+                    "status": "valid",
+                    "currentness": "current",
+                    "command": "fixture verification",
+                    "working_directory": str(project),
+                    "exit_code": 0,
+                    "baseline": baseline,
+                    "producer": "test",
+                    "reproducible": True,
+                    "requirements": ["REQ-001"],
+                    "decisions": [],
+                    "tasks": list(tasks),
+                    "issues": [],
+                    "executed_at": "2026-07-12T08:00:00+08:00",
+                    "validated_at": "2026-07-12T08:01:00+08:00",
+                    "expires_at": "2099-07-12T08:01:00+08:00",
+                    "output_path": str(output),
+                }
+
+            evidence = [
+                evidence_record("EVD-SHARED", ["TASK-002"]),
+                evidence_record("EVD-FINAL", ["TASK-002"]),
+                evidence_record("EVD-TASKING", ["TASK-002"]),
+                evidence_record("EVD-IMPL", ["TASK-002"]),
+                evidence_record("EVD-ASSURE", ["TASK-002"]),
+            ]
+            early_artifacts = {
+                "requirements_baseline": "ART-BASELINE",
+                "route_selection": "ART-ROUTE",
+            }
+            early_phases = state.WORKFLOW_PHASES[:6]
+            phases = [
+                {
+                    "id": phase_id,
+                    "status": "completed",
+                    "artifacts": [early_artifacts.get(phase_id, "ART-EARLY")],
+                    "evidence": ["EVD-SHARED"],
+                }
+                for phase_id in early_phases
+            ]
+            phases.extend([
+                {
+                    "id": "specification",
+                    "status": "completed",
+                    "artifacts": ["ART-SPEC"],
+                    "evidence": ["EVD-SHARED"],
+                },
+                {
+                    "id": "final_spec_approval",
+                    "status": "completed",
+                    "artifacts": ["ART-FINAL"],
+                    "evidence": ["EVD-FINAL"],
+                },
+                {
+                    "id": "tasking",
+                    "status": "completed",
+                    "artifacts": ["ART-TASKING"],
+                    "evidence": ["EVD-TASKING"],
+                },
+                {
+                    "id": "implementation",
+                    "status": "completed",
+                    "artifacts": ["ART-IMPL"],
+                    "evidence": ["EVD-IMPL"],
+                },
+                {
+                    "id": "independent_assurance",
+                    "status": "stale",
+                    "artifacts": ["ART-ASSURE"],
+                    "evidence": ["EVD-ASSURE"],
+                },
+                {"id": "knowledge_archive", "status": "pending"},
+            ])
+            change = {
+                "id": "CHG-004",
+                "type": "CHG",
+                "version": 1,
+                "status": "approved",
+                "approved_by": "user",
+                "summary": "Remove compatibility normalization",
+                "affected_phases": [
+                    "specification",
+                    "final_spec_approval",
+                    "tasking",
+                    "implementation",
+                    "independent_assurance",
+                ],
+                "affected_artifacts": list(artifact_specs),
+                "affected_tasks": ["TASK-002"],
+            }
+            payload["phases"] = phases
+            payload["artifacts"] = artifacts
+            payload["tasks"] = [{
+                "id": "TASK-002",
+                "status": "stale",
+                "currentness": "current",
+                "depends_on": [],
+            }]
+            payload["evidence"] = evidence
+            payload["ledger"] = [
+                {
+                    "id": "DEC-005",
+                    "type": "DEC",
+                    "version": 1,
+                    "status": "approved",
+                    "approved_by": "user",
+                    "summary": "Approve requirements baseline",
+                    "gate": "requirements_baseline",
+                    "artifact_versions": {"ART-BASELINE": 1},
+                },
+                {
+                    "id": "DEC-006",
+                    "type": "DEC",
+                    "version": 1,
+                    "status": "approved",
+                    "approved_by": "user",
+                    "summary": "Select route",
+                    "gate": "route_selection",
+                    "artifact_versions": {"ART-ROUTE": 1},
+                },
+                {
+                    "id": "DEC-009",
+                    "type": "DEC",
+                    "version": 1,
+                    "status": "approved",
+                    "approved_by": "user",
+                    "summary": "Approve prior final specification",
+                    "gate": "final_spec_approval",
+                    "artifact_versions": {"ART-FINAL": 1},
+                },
+                change,
+            ]
+            payload["gates"] = {
+                "requirements_baseline": {
+                    "status": "approved",
+                    "approval_id": "DEC-005",
+                    "artifact_versions": {"ART-BASELINE": 1},
+                },
+                "route_selection": {
+                    "status": "approved",
+                    "approval_id": "DEC-006",
+                    "artifact_versions": {"ART-ROUTE": 1},
+                },
+                "final_spec_approval": {
+                    "status": "approved",
+                    "approval_id": "DEC-009",
+                    "artifact_versions": {"ART-FINAL": 1},
+                }
+            }
+            system = workflow / "系统"
+            state_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            for field, filename in workflow_ops.MANIFEST_FILES.items():
+                manifest_path = system / filename
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest[field] = payload[field]
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+            invalidated = run_cli(
+                "invalidate-chain",
+                "--workflow", str(workflow),
+                "--change-id", "CHG-004",
+                env=env,
+            )
+            reconciled = run_cli(
+                "reconcile", "--workflow", str(workflow), env=env,
+            )
+            after_first = state_path.read_text(encoding="utf-8")
+            duplicate = run_cli(
+                "invalidate-chain",
+                "--workflow", str(workflow),
+                "--change-id", "CHG-004",
+                env=env,
+            )
+
+            self.assertEqual(invalidated.returncode, 0, invalidated.stdout)
+            self.assertEqual(reconciled.returncode, 0, reconciled.stdout)
+            self.assertEqual(duplicate.returncode, 2, duplicate.stdout)
+            self.assertEqual(after_first, state_path.read_text(encoding="utf-8"))
+            updated = json.loads(after_first)
+            phase_status = {
+                item["id"]: item["status"] for item in updated["phases"]
+            }
+            self.assertEqual(phase_status["specification"], "stale")
+            for phase_id in (
+                "final_spec_approval",
+                "tasking",
+                "implementation",
+                "independent_assurance",
+            ):
+                self.assertEqual(phase_status[phase_id], "pending")
+            self.assertNotIn("final_spec_approval", updated["gates"])
+            artifact_index = {item["id"]: item for item in updated["artifacts"]}
+            self.assertEqual(artifact_index["ART-EARLY"]["currentness"], "current")
+            self.assertEqual(artifact_index["ART-SPEC"]["currentness"], "stale")
+            task = updated["tasks"][0]
+            self.assertEqual(task["status"], "stale")
+            self.assertEqual(task["currentness"], "stale")
+            evidence_index = {item["id"]: item for item in updated["evidence"]}
+            self.assertEqual(evidence_index["EVD-SHARED"]["currentness"], "current")
+            self.assertEqual(evidence_index["EVD-IMPL"]["currentness"], "stale")
+            invalidation = updated["phase_invalidations"][0]
+            self.assertEqual(invalidation["change_id"], "CHG-004")
+            self.assertEqual(invalidation["prior_phases"][-1]["status"], "stale")
 
     def test_task_registration_requires_self_contained_handoff_contract(self):
         with tempfile.TemporaryDirectory() as directory:

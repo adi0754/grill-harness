@@ -16,4 +16,6 @@ description: Use when work is interrupted, drifting, repeatedly failing, or bloc
 
 找到内核后运行 `python3 <主内核>/scripts/grh.py entry-check --entry grh-recover --project <项目绝对路径>`，用户范围更窄时追加 `--requested-scope`。资格检查通过后只按主内核契约执行允许范围。
 
+用户已批准的 `CHG-xxx` 明确列出连续 `affected_phases`，且规格或决策变化需要重新开放早期阶段时，使用 `python3 <主内核>/scripts/grh.py invalidate-chain --workflow <工作流绝对路径> --change-id <CHG-ID>` 原子传播失效。不得逐阶段制造非法中间态，也不得用该命令替用户批准更新后的需求基线、路线或最终规格。
+
 缺少 grill-harness 主内核时失败关闭，不创建 `~/.grill-harness/`，并建议完整安装：`npx skills add <Grill-Harness仓库或URL> -g -a codex claude-code -s '*' -y --copy`。契约不兼容、入口不完整或 `entry-check` 非零退出时原样报告并停止。

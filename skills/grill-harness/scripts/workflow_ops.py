@@ -601,6 +601,518 @@ def register_record(
     return {"kind": kind, "id": record_id, "workflow_path": str(state_path)}
 
 
+def _latest_ledger_record(workflow, record_id):
+    records = [
+        item
+        for item in workflow.get("ledger", ())
+        if isinstance(item, dict) and item.get("id") == record_id
+    ]
+    return records[-1] if records else None
+
+
+def _is_direct_baseline_approval(record, workflow_id):
+    return (
+        isinstance(record, dict)
+        and record.get("type") == "CHG"
+        and record.get("status") == "approved"
+        and record.get("approved_by") == "user"
+        and record.get("operation") == "baseline_reconcile"
+        and record.get("workflow_id") == workflow_id
+        and record.get("ignore_owner_worktree_changes") is True
+    )
+
+
+def _baseline_approval(workflow, approval_id):
+    workflow_id = workflow.get("workflow_id")
+    approval = _latest_ledger_record(workflow, approval_id)
+    if _is_direct_baseline_approval(approval, workflow_id):
+        return approval, None
+    if not (
+        isinstance(approval, dict)
+        and approval.get("type") == "CHG"
+        and approval.get("status") == "approved"
+        and approval.get("operation") == "baseline_reconcile"
+        and approval.get("workflow_id") == workflow_id
+        and approval.get("ignore_owner_worktree_changes") is True
+    ):
+        raise ValueError(
+            "baseline reconciliation requires a durable user approval for the current workflow"
+        )
+    related_change = approval.get("related_change")
+    if not isinstance(related_change, str) or not related_change.strip():
+        raise ValueError(
+            "baseline reconciliation reuse requires related_change to a durable user approval"
+        )
+    if approval.get("route_invalidated") is not False:
+        raise ValueError(
+            "baseline reconciliation reuse requires route_invalidated: false"
+        )
+    if approval.get("product_change") is not False:
+        raise ValueError(
+            "baseline reconciliation reuse requires product_change: false"
+        )
+    related_approval = _latest_ledger_record(workflow, related_change)
+    if not isinstance(related_approval, dict):
+        raise ValueError(
+            "baseline reconciliation related_change must exist in the current workflow"
+        )
+    if related_approval.get("workflow_id") != workflow_id:
+        raise ValueError(
+            "baseline reconciliation related_change must be approved for the current workflow"
+        )
+    if not _is_direct_baseline_approval(related_approval, workflow_id):
+        raise ValueError(
+            "baseline reconciliation related_change must reference a durable user approval"
+        )
+    return approval, related_change
+
+
+def reconcile_baseline(
+    workflow_value,
+    evidence_value,
+    approval_id,
+    *,
+    current_baseline,
+    project_root,
+    task_ids=(),
+):
+    """Atomically rebind entered workflow state to one approved current baseline."""
+
+    if not isinstance(current_baseline, str) or not current_baseline:
+        raise ValueError("baseline reconciliation requires the current project baseline")
+    state_path = _state_path(workflow_value)
+    workflow_root = state_path.parent.parent
+    evidence_path = Path(evidence_value).expanduser().resolve()
+    evidence = _mapping(evidence_path)
+    lock = state_path.parent / ".workflow.lock"
+    with common.exclusive_directory_lock(lock):
+        workflow, manifests = _load(state_path)
+        approval, reused_approval_id = _baseline_approval(workflow, approval_id)
+        reconciliations = workflow.get("baseline_reconciliations", ())
+        if any(
+            isinstance(item, dict) and item.get("approval_id") == approval_id
+            for item in reconciliations
+        ):
+            raise ValueError("baseline reconciliation approval was already used")
+
+        evidence_id = evidence.get("id")
+        if not isinstance(evidence_id, str) or not evidence_id.strip():
+            raise ValueError("baseline reconciliation evidence requires a stable id")
+        if any(
+            isinstance(item, dict) and item.get("id") == evidence_id
+            for item in workflow.get("evidence", ())
+        ):
+            raise ValueError("record id already exists: {}".format(evidence_id))
+        evidence_report = validate.validate_evidence(
+            evidence,
+            current_baseline=current_baseline,
+            current_time=datetime.now(timezone.utc).isoformat(),
+            require_output_exists=True,
+        )
+        if not evidence_report["valid"]:
+            raise ValueError(evidence_report["conflicts"][0]["conflict"])
+        if not _within_workflow(evidence.get("output_path"), workflow_root):
+            raise ValueError("evidence output must be inside the current workflow")
+        try:
+            Path(evidence.get("working_directory")).resolve().relative_to(
+                Path(project_root).expanduser().resolve()
+            )
+        except (TypeError, ValueError):
+            raise ValueError("evidence working directory must stay inside the owning project")
+
+        entered_states = {"in_progress", "needs_user", "blocked", "completed"}
+        updated_phases = []
+        rebound_phases = []
+        prior_phase_evidence = {}
+        for phase in workflow.get("phases", ()):
+            if not isinstance(phase, dict) or phase.get("status") not in entered_states:
+                updated_phases.append(phase)
+                continue
+            candidate = dict(phase)
+            phase_id = candidate.get("id")
+            prior_phase_evidence[phase_id] = list(candidate.get("evidence", ()))
+            candidate["evidence"] = [evidence_id]
+            updated_phases.append(candidate)
+            rebound_phases.append(phase_id)
+
+        requested_tasks = set(task_ids)
+        updated_tasks = []
+        rebound_tasks = []
+        for task in workflow.get("tasks", ()):
+            if not isinstance(task, dict) or task.get("id") not in requested_tasks:
+                updated_tasks.append(task)
+                continue
+            if task.get("status") not in {
+                "pending",
+                "in_progress",
+                "needs_user",
+                "blocked",
+                "failed",
+                "stale",
+            }:
+                raise ValueError(
+                    "baseline reconciliation cannot rebind terminal task: {}".format(
+                        task.get("id")
+                    )
+                )
+            candidate = dict(task)
+            candidate["baseline_reconciled_from"] = candidate.get("git_baseline")
+            candidate["git_baseline"] = current_baseline
+            candidate["baseline_reconciliation_approval_id"] = approval_id
+            candidate["baseline_reconciliation_evidence_id"] = evidence_id
+            updated_tasks.append(candidate)
+            rebound_tasks.append(candidate.get("id"))
+        missing_tasks = requested_tasks.difference(rebound_tasks)
+        if missing_tasks:
+            raise ValueError(
+                "baseline reconciliation references unknown tasks: {}".format(
+                    ", ".join(sorted(missing_tasks))
+                )
+            )
+
+        reconciliation_record = {
+            "approval_id": approval_id,
+            "reused_approval_id": reused_approval_id,
+            "evidence_id": evidence_id,
+            "from_baseline": workflow.get("git_baseline"),
+            "to_baseline": current_baseline,
+            "rebound_phases": rebound_phases,
+            "prior_phase_evidence": prior_phase_evidence,
+            "rebound_tasks": rebound_tasks,
+            "reconciled_at": datetime.now(timezone.utc).isoformat(),
+        }
+        updated = dict(workflow)
+        updated["git_baseline"] = current_baseline
+        updated["evidence"] = list(workflow.get("evidence", ())) + [evidence]
+        updated["phases"] = updated_phases
+        updated["tasks"] = updated_tasks
+        updated["baseline_reconciliations"] = list(reconciliations) + [
+            reconciliation_record
+        ]
+        report = validate.reconcile_workflow(
+            updated,
+            current_baseline=current_baseline,
+            current_time=datetime.now(timezone.utc).isoformat(),
+            storage_root=str(workflow_root),
+        )
+        if not report["valid"]:
+            raise ValueError(report["conflicts"][0]["conflict"])
+        _write(state_path, updated, manifests)
+    return {
+        "workflow_path": str(state_path),
+        "baseline": current_baseline,
+        "evidence_id": evidence_id,
+        "reused_approval_id": reused_approval_id,
+        "rebound_phases": rebound_phases,
+        "rebound_tasks": rebound_tasks,
+    }
+
+
+def _approved_change(workflow, change_id):
+    changes = [
+        item
+        for item in workflow.get("ledger", ())
+        if isinstance(item, dict) and item.get("id") == change_id
+    ]
+    change = changes[-1] if changes else None
+    if not (
+        isinstance(change, dict)
+        and change.get("type") == "CHG"
+        and change.get("status") == "approved"
+        and change.get("approved_by") == "user"
+    ):
+        raise ValueError(
+            "phase invalidation requires a durable user-approved CHG record"
+        )
+    return change
+
+
+def _change_ids(change, field):
+    values = change.get(field, [])
+    if not isinstance(values, list) or any(
+        not isinstance(item, str) or not item.strip() for item in values
+    ):
+        raise ValueError("change {} must be a string list".format(field))
+    if len(values) != len(set(values)):
+        raise ValueError("change {} must not contain duplicate IDs".format(field))
+    return list(values)
+
+
+def _mark_stale(record, change_id):
+    candidate = dict(record)
+    candidate["currentness"] = "stale"
+    candidate["stale_because"] = change_id
+    if candidate.get("status") not in {"superseded", "cancelled", "failed"}:
+        candidate["status"] = "stale"
+    return candidate
+
+
+def invalidate_phase_chain(workflow_value, change_id):
+    """Atomically invalidate one approved change's contiguous phase chain."""
+
+    state_path = _state_path(workflow_value)
+    workflow_root = state_path.parent.parent
+    lock = state_path.parent / ".workflow.lock"
+    with common.exclusive_directory_lock(lock):
+        workflow, manifests = _load(state_path)
+        change = _approved_change(workflow, change_id)
+        invalidations = workflow.get("phase_invalidations")
+        if invalidations is None:
+            invalidations = []
+        elif not isinstance(invalidations, list):
+            raise ValueError("phase_invalidations must be a list")
+        if any(
+            isinstance(item, dict) and item.get("change_id") == change_id
+            for item in invalidations
+        ):
+            raise ValueError("change was already used for phase invalidation")
+
+        affected_phases = _change_ids(change, "affected_phases")
+        if not affected_phases:
+            raise ValueError("phase invalidation requires affected_phases")
+        unknown_phases = set(affected_phases).difference(state.WORKFLOW_PHASES)
+        if unknown_phases:
+            raise ValueError(
+                "change references unknown phases: {}".format(
+                    ", ".join(sorted(unknown_phases))
+                )
+            )
+        phase_positions = [
+            state.WORKFLOW_PHASES.index(item) for item in affected_phases
+        ]
+        expected_positions = list(
+            range(min(phase_positions), max(phase_positions) + 1)
+        )
+        if phase_positions != expected_positions:
+            raise ValueError(
+                "affected_phases must be one ordered contiguous phase chain"
+            )
+
+        phases = workflow.get("phases")
+        if not isinstance(phases, list):
+            raise ValueError("phases must be a list")
+        phase_index = {
+            item.get("id"): item for item in phases if isinstance(item, dict)
+        }
+        missing_phases = set(affected_phases).difference(phase_index)
+        if missing_phases:
+            raise ValueError(
+                "workflow is missing affected phases: {}".format(
+                    ", ".join(sorted(missing_phases))
+                )
+            )
+        first_phase = affected_phases[0]
+        first_position = state.WORKFLOW_PHASES.index(first_phase)
+        first_status = phase_index[first_phase].get("status")
+        if first_status in {"pending", "superseded", "cancelled"}:
+            raise ValueError(
+                "first affected phase must be entered before it can become stale"
+            )
+        if first_status != "stale" and not state.can_transition(
+            first_status, "stale"
+        ):
+            raise ValueError(
+                "first affected phase cannot legally transition to stale"
+            )
+        entered_later = [
+            phase_id
+            for phase_id in state.WORKFLOW_PHASES[first_position + 1:]
+            if phase_id in phase_index
+            and phase_id not in affected_phases
+            and phase_index[phase_id].get("status")
+            not in {"pending", "skipped", "superseded", "cancelled"}
+        ]
+        if entered_later:
+            raise ValueError(
+                "affected_phases must include every entered downstream phase: "
+                + ", ".join(entered_later)
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        current_report = validate.reconcile_workflow(
+            workflow,
+            current_baseline=workflow.get("git_baseline"),
+            current_time=now,
+            storage_root=str(workflow_root),
+        )
+        if not current_report["valid"]:
+            raise ValueError(current_report["conflicts"][0]["conflict"])
+
+        # Baseline recovery evidence can be shared by phases before the changed
+        # contract. Keep those records current so unrelated completed phases stay valid.
+        protected_artifacts = set()
+        protected_evidence = set()
+        for phase_id in state.WORKFLOW_PHASES[:first_position]:
+            phase = phase_index.get(phase_id, {})
+            protected_artifacts.update(phase.get("artifacts", ()))
+            protected_evidence.update(phase.get("evidence", ()))
+
+        # The state machine permits one non-pending phase after the completed prefix.
+        # Keep the earliest affected phase stale and reopen every later phase as pending.
+        prior_phases = []
+        updated_phases = []
+        for phase in phases:
+            if not isinstance(phase, dict) or phase.get("id") not in affected_phases:
+                updated_phases.append(phase)
+                continue
+            candidate = dict(phase)
+            prior_phases.append(copy.deepcopy(candidate))
+            if candidate.get("id") == first_phase:
+                candidate["status"] = "stale"
+                candidate["stale_because"] = change_id
+            else:
+                candidate["status"] = "pending"
+                candidate["reset_by"] = change_id
+                candidate.pop("artifacts", None)
+                candidate.pop("evidence", None)
+                candidate.pop("skip_reason", None)
+                candidate.pop("skip_approval_id", None)
+                candidate.pop("optional", None)
+            updated_phases.append(candidate)
+
+        gate_phases = {
+            "requirements_baseline": "requirements_baseline",
+            "route_selection": "route_selection",
+            "final_spec_approval": "final_spec_approval",
+        }
+        updated_gates = dict(workflow.get("gates", {}))
+        removed_gates = {}
+        for gate, phase_id in gate_phases.items():
+            if phase_id in affected_phases and gate in updated_gates:
+                removed_gates[gate] = updated_gates.pop(gate)
+
+        affected_artifacts = set(_change_ids(change, "affected_artifacts"))
+        artifact_ids = {
+            item.get("id")
+            for item in workflow.get("artifacts", ())
+            if isinstance(item, dict)
+        }
+        missing_artifacts = affected_artifacts.difference(artifact_ids)
+        if missing_artifacts:
+            raise ValueError(
+                "change references unknown artifacts: {}".format(
+                    ", ".join(sorted(missing_artifacts))
+                )
+            )
+        staled_artifacts = []
+        preserved_artifacts = []
+        updated_artifacts = []
+        for artifact in workflow.get("artifacts", ()):
+            artifact_id = artifact.get("id") if isinstance(artifact, dict) else None
+            if artifact_id not in affected_artifacts:
+                updated_artifacts.append(artifact)
+            elif artifact_id in protected_artifacts:
+                updated_artifacts.append(artifact)
+                preserved_artifacts.append(artifact_id)
+            else:
+                updated_artifacts.append(_mark_stale(artifact, change_id))
+                staled_artifacts.append(artifact_id)
+
+        affected_tasks = set(_change_ids(change, "affected_tasks"))
+        task_ids = {
+            item.get("id")
+            for item in workflow.get("tasks", ())
+            if isinstance(item, dict)
+        }
+        missing_tasks = affected_tasks.difference(task_ids)
+        if missing_tasks:
+            raise ValueError(
+                "change references unknown tasks: {}".format(
+                    ", ".join(sorted(missing_tasks))
+                )
+            )
+        staled_tasks = []
+        updated_tasks = []
+        for task in workflow.get("tasks", ()):
+            task_id = task.get("id") if isinstance(task, dict) else None
+            if task_id not in affected_tasks:
+                updated_tasks.append(task)
+                continue
+            updated_tasks.append(_mark_stale(task, change_id))
+            staled_tasks.append(task_id)
+
+        explicit_evidence = set(_change_ids(change, "affected_evidence"))
+        evidence_ids = {
+            item.get("id")
+            for item in workflow.get("evidence", ())
+            if isinstance(item, dict)
+        }
+        missing_evidence = explicit_evidence.difference(evidence_ids)
+        if missing_evidence:
+            raise ValueError(
+                "change references unknown evidence: {}".format(
+                    ", ".join(sorted(missing_evidence))
+                )
+            )
+        staled_evidence = []
+        preserved_evidence = []
+        updated_evidence = []
+        affected_links = affected_artifacts.union(affected_tasks)
+        for evidence in workflow.get("evidence", ()):
+            if not isinstance(evidence, dict):
+                updated_evidence.append(evidence)
+                continue
+            evidence_id = evidence.get("id")
+            links = set(evidence.get("tasks", ()))
+            links.update(evidence.get("artifacts", ()))
+            links.update(evidence.get("depends_on", ()))
+            should_stale = evidence_id in explicit_evidence or bool(
+                links.intersection(affected_links)
+            )
+            if not should_stale:
+                updated_evidence.append(evidence)
+            elif evidence_id in protected_evidence:
+                updated_evidence.append(evidence)
+                preserved_evidence.append(evidence_id)
+            else:
+                updated_evidence.append(_mark_stale(evidence, change_id))
+                staled_evidence.append(evidence_id)
+
+        invalidation_record = {
+            "change_id": change_id,
+            "from_phase": first_phase,
+            "affected_phases": affected_phases,
+            "prior_phases": prior_phases,
+            "removed_gates": removed_gates,
+            "staled_artifacts": staled_artifacts,
+            "preserved_artifacts": preserved_artifacts,
+            "staled_tasks": staled_tasks,
+            "staled_evidence": staled_evidence,
+            "preserved_evidence": preserved_evidence,
+            "invalidated_at": now,
+        }
+        updated = dict(workflow)
+        updated["phases"] = updated_phases
+        updated["gates"] = updated_gates
+        updated["artifacts"] = updated_artifacts
+        updated["tasks"] = updated_tasks
+        updated["evidence"] = updated_evidence
+        updated["phase_invalidations"] = list(invalidations) + [
+            invalidation_record
+        ]
+        report = validate.reconcile_workflow(
+            updated,
+            current_baseline=workflow.get("git_baseline"),
+            current_time=now,
+            storage_root=str(workflow_root),
+        )
+        if not report["valid"]:
+            raise ValueError(report["conflicts"][0]["conflict"])
+        _write(state_path, updated, manifests)
+    return {
+        "workflow_path": str(state_path),
+        "change_id": change_id,
+        "from_phase": first_phase,
+        "reset_phases": affected_phases[1:],
+        "removed_gates": sorted(removed_gates),
+        "staled_artifacts": staled_artifacts,
+        "preserved_artifacts": preserved_artifacts,
+        "staled_tasks": staled_tasks,
+        "staled_evidence": staled_evidence,
+        "preserved_evidence": preserved_evidence,
+    }
+
+
 def approve_gate(workflow_value, gate, approval_id, artifact_versions):
     if gate not in state.HUMAN_GATES:
         raise ValueError("unknown human gate: {}".format(gate))
@@ -1336,6 +1848,8 @@ def parse_artifact_versions(values):
 
 __all__ = [
     "approve_gate",
+    "invalidate_phase_chain",
+    "reconcile_baseline",
     "parse_artifact_versions",
     "commit_knowledge_update",
     "record_failure_attempt",

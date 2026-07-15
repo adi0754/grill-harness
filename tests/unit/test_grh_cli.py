@@ -570,6 +570,19 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertTrue(payload["preflight"]["ready"])
             self.assertFalse(payload["preflight"]["actions_performed"])
+            self.assertEqual(
+                payload["preflight"]["missing_optional"],
+                [
+                    "research",
+                    "prototype",
+                    "tdd",
+                    "code-review",
+                    "wayfinder",
+                    "to-spec",
+                    "to-tickets",
+                    "implement",
+                ],
+            )
 
     def test_status_reports_not_started_without_creating_storage(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -588,6 +601,89 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertTrue(payload["reconciliation"]["valid"])
             self.assertEqual(payload["next_eligible_phase"], "preflight")
             self.assertFalse(root.exists())
+
+    def test_status_and_reconcile_report_missing_user_confirmation_as_non_blocking(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            initialized = run_cli(
+                "init",
+                "--project",
+                str(project),
+                "--workflow-name",
+                "提示检查",
+                "--workflow-key",
+                "hint-check",
+                "--created-date",
+                "2026-07-15",
+                env=env,
+            )
+            workflow = Path(json.loads(initialized.stdout)["workflow_path"])
+
+            status = run_cli(
+                "status", "--project", str(project), "--workflow", str(workflow), env=env,
+            )
+            reconciled = run_cli("reconcile", "--workflow", str(workflow), env=env)
+
+            self.assertEqual(initialized.returncode, 0, initialized.stdout)
+            self.assertEqual(status.returncode, 0, status.stdout)
+            self.assertEqual(reconciled.returncode, 0, reconciled.stdout)
+            for result in (status, reconciled):
+                payload = json.loads(result.stdout)
+                self.assertIn(
+                    "MISSING_USER_CONFIRMATION_RECORD",
+                    {item["code"] for item in payload["non_blocking_hints"]},
+                )
+
+    def test_status_and_reconcile_warn_about_open_implementation_radar_after_entry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            workflow_path = Path(temp_dir) / "state.yaml"
+            workflow_path.write_text(
+                json.dumps(
+                    {
+                        "phases": [
+                            {"id": "preflight", "status": "pending"},
+                            {"id": "implementation", "status": "in_progress"},
+                        ],
+                        "artifacts": [],
+                        "tasks": [],
+                        "evidence": [],
+                        "gates": {},
+                        "ledger": [
+                            {
+                                "id": "RAD-004",
+                                "type": "RAD",
+                                "version": 1,
+                                "blocking_level": "implementation",
+                                "status": "open",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            status = run_cli(
+                "status", "--project", str(project), "--workflow", str(workflow_path),
+            )
+            reconciled = run_cli("reconcile", "--workflow", str(workflow_path))
+
+            self.assertEqual(status.returncode, 1, status.stdout)
+            self.assertEqual(reconciled.returncode, 1, reconciled.stdout)
+            for result in (status, reconciled):
+                payload = json.loads(result.stdout)
+                hint = next(
+                    item
+                    for item in payload["non_blocking_hints"]
+                    if item["code"] == "OPEN_IMPLEMENTATION_RADAR"
+                )
+                self.assertEqual(hint["radar_ids"], ["RAD-004"])
 
     def test_init_creates_minimal_workflow_only_under_test_storage(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -919,6 +1015,138 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertEqual(len(index["projects"]), 1)
             self.assertEqual(
                 index["projects"][0]["normalized_path"], str(moved.resolve())
+            )
+
+    def test_legacy_project_with_overlapping_history_keeps_workflow_owner(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            subprocess.run(["git", "init", "-q", str(project)], check=True)
+            subprocess.run(
+                ["git", "-C", str(project), "config", "user.name", "Tests"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(project), "config", "user.email", "tests@example.com"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-C", str(project), "remote", "add", "origin",
+                    "https://github.com/example/project.git",
+                ],
+                check=True,
+            )
+            (project / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(project), "add", "README.md"], check=True)
+            subprocess.run(
+                ["git", "-C", str(project), "commit", "-qm", "init"],
+                check=True,
+            )
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            created = run_cli(
+                "init", "--project", str(project), "--workflow-name", "历史兼容",
+                "--workflow-key", "history", "--created-date", "2026-07-12",
+                env=env,
+            )
+            self.assertEqual(created.returncode, 0, created.stdout)
+            workflow = Path(json.loads(created.stdout)["workflow_path"])
+            project_directory = workflow.parent.parent
+            legacy_directory = project_directory.with_name("project-legacy")
+            project_directory.rename(legacy_directory)
+            legacy_workflow = legacy_directory / "工作流" / workflow.name
+
+            index_path = root / "项目索引.yaml"
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            current_root = index["projects"][0]["history_roots"][0]
+            legacy_record = dict(
+                index["projects"][0],
+                project_id="legacy-project-id",
+                directory_name=legacy_directory.name,
+                history_roots=[current_root, "legacy-stash-root"],
+                relocation_candidates=["legacy-only"],
+            )
+            index["projects"] = [legacy_record]
+            index_path.write_text(
+                json.dumps(index, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (legacy_directory / "项目信息.yaml").write_text(
+                json.dumps(legacy_record, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            state_path = legacy_workflow / "系统" / "state.yaml"
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            state_payload["project_id"] = "legacy-project-id"
+            state_path.write_text(
+                json.dumps(state_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            identified = run_cli("identify", "--project", str(project), env=env)
+            status = run_cli("status", "--project", str(project), env=env)
+            output = legacy_workflow / "过程产物" / "实施报告" / "owner-check.log"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("ok\n", encoding="utf-8")
+            evidence_record = legacy_workflow / "系统" / "owner-evidence.yaml"
+            evidence_record.write_text(
+                json.dumps(
+                    {
+                        "id": "EVD-owner",
+                        "status": "valid",
+                        "currentness": "current",
+                        "command": "owner compatibility check",
+                        "working_directory": str(project),
+                        "exit_code": 0,
+                        "baseline": state_payload["git_baseline"],
+                        "producer": "test",
+                        "reproducible": True,
+                        "requirements": ["REQ-owner"],
+                        "decisions": [],
+                        "tasks": [],
+                        "issues": [],
+                        "executed_at": "2026-07-12T20:00:00+08:00",
+                        "validated_at": "2026-07-12T20:01:00+08:00",
+                        "expires_at": "2099-07-12T20:01:00+08:00",
+                        "output_path": str(output),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            registered = run_cli(
+                "record", "--workflow", str(legacy_workflow), "--kind", "evidence",
+                "--record", str(evidence_record), "--project", str(project), env=env,
+            )
+            second = run_cli(
+                "init", "--project", str(project), "--workflow-name", "第二工作流",
+                "--workflow-key", "history-second", "--created-date", "2026-07-12",
+                env=env,
+            )
+
+            self.assertEqual(identified.returncode, 0, identified.stdout)
+            self.assertEqual(
+                json.loads(identified.stdout)["project"]["project_id"],
+                "legacy-project-id",
+            )
+            self.assertEqual(status.returncode, 0, status.stdout)
+            self.assertEqual(
+                json.loads(status.stdout)["workflow_path"],
+                str(state_path),
+            )
+            self.assertEqual(registered.returncode, 0, registered.stdout)
+            self.assertEqual(second.returncode, 0, second.stdout)
+            second_path = Path(json.loads(second.stdout)["workflow_path"])
+            self.assertEqual(second_path.parent, legacy_workflow.parent)
+            updated_index = json.loads(index_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(updated_index["projects"]), 1)
+            self.assertEqual(
+                updated_index["projects"][0]["history_roots"], [current_root]
             )
 
     def test_init_rejects_invalid_created_date_as_json(self):

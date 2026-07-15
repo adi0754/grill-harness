@@ -34,6 +34,7 @@ class TemplateContractTests(unittest.TestCase):
         "问题与发现.yaml",
         "相似实现对照.md",
         "需求调查任务.md",
+        "用户确认记录.md",
         "知识条目.yaml",
         "学习草稿.md",
         "知识变更预览.md",
@@ -54,6 +55,7 @@ class TemplateContractTests(unittest.TestCase):
             "Codex运行时.md",
             "Claude-Code运行时.md",
             "测试与验收.md",
+            "能力编排矩阵.md",
         ):
             self.assertTrue((REFERENCES / name).is_file(), name)
 
@@ -80,7 +82,8 @@ class TemplateContractTests(unittest.TestCase):
             self.assertIn(field, task)
 
     def test_task_graph_template_is_consumable_by_all_task_graph_apis(self):
-        tasks = self.load_json_yaml("任务图.yaml")["tasks"]
+        graph_template = self.load_json_yaml("任务图.yaml")
+        tasks = graph_template["tasks"]
         required = {
             "id", "status", "currentness", "depends_on", "blockers", "write_paths",
             "shared_contracts", "migrations", "generated_files", "worktree", "branch",
@@ -91,6 +94,7 @@ class TemplateContractTests(unittest.TestCase):
         self.assertTrue(required.issubset(tasks[0]))
         self.assertTrue(task_graph.validate_dag(tasks)["valid"])
         self.assertEqual(task_graph.calculate_frontier(tasks)["frontier"], ["TASK-001"])
+        self.assertIn("non_split_reason", graph_template["decomposition"])
 
         peer = dict(tasks[0])
         peer.update({
@@ -158,6 +162,13 @@ class TemplateContractTests(unittest.TestCase):
             "需求雷达.md",
             "问题与发现.yaml",
             "相似实现对照.md",
+            "用户确认记录.md",
+            "问题、用户答复原文、结果 DEC/RAD ID",
+            "无需提问的理由",
+            "跳过研究/原型",
+            "不拆的理由",
+            "blocking_level: implementation",
+            "task-review",
             "用户选择调查 Agent",
             "不得自动串联",
             "最终规格批准后生成执行 Frontier 并停止",
@@ -170,6 +181,7 @@ class TemplateContractTests(unittest.TestCase):
             "过程产物/需求审问/需求雷达.md",
             "过程产物/需求审问/问题与发现.yaml",
             "过程产物/需求审问/相似实现对照.md",
+            "过程产物/需求审问/用户确认记录.md",
             "过程产物/学习草稿/",
             "知识库/项目知识/",
             "知识库/通用知识/",
@@ -262,7 +274,8 @@ class TemplateContractTests(unittest.TestCase):
             self.assertIn(question, state_machine)
 
         radar = self.read("需求雷达.md")
-        self.assertIn("## 30 秒结论", radar)
+        self.assertIn("## 给用户的话", radar)
+        self.assertIn("### 30 秒结论", radar)
         self.assertIn("## 给用户看的五个问题", radar)
 
         start_skill = (ROOT / "skills" / "grh-start" / "SKILL.md").read_text(encoding="utf-8")
@@ -281,6 +294,102 @@ class TemplateContractTests(unittest.TestCase):
         ):
             thin_skill = (ROOT / "skills" / entry / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn("完整读取其 `SKILL.md`", thin_skill, entry)
+
+    def test_human_facing_templates_start_with_plain_chinese_and_defer_machine_fields(self):
+        names = (
+            "仓库挑战.md",
+            "需求基线.md",
+            "路线卡.md",
+            "规格.md",
+            "相似实现对照.md",
+            "项目经验.md",
+            "实施任务.md",
+            "审查任务.md",
+            "验收任务.md",
+            "修复任务.md",
+            "集成任务.md",
+            "需求调查任务.md",
+            "需求雷达.md",
+            "学习草稿.md",
+            "用户确认记录.md",
+            "知识变更预览.md",
+        )
+        machine_markers = (
+            "REQ-",
+            "DEC-",
+            "CON-",
+            "TASK-",
+            "ISSUE-",
+            "EVD-",
+            "RAD-",
+            "PASS_WITH_LIMITATION",
+            "KNW-",
+            "KPV-",
+            "FAIL-",
+        )
+        for name in names:
+            with self.subTest(name=name):
+                text = self.read(name)
+                first_section = next(
+                    line for line in text.splitlines() if line.startswith("## ")
+                )
+                self.assertEqual(first_section, "## 给用户的话")
+                self.assertIn("### 30 秒结论：", text)
+                self.assertIn("## 证据与标识", text)
+                user_section = text.split("## 给用户的话", 1)[1].split("\n## ", 1)[0]
+                self.assertGreater(user_section.count("。"), 0)
+                self.assertLessEqual(user_section.count("。"), 5)
+                before_evidence = text.split("## 证据与标识", 1)[0]
+                for marker in machine_markers:
+                    self.assertNotIn(marker, before_evidence, (name, marker))
+                self.assertNotIn("Git 基线", before_evidence)
+
+        acceptance = self.read("验收任务.md")
+        narrative, evidence = acceptance.split("## 证据与标识", 1)
+        self.assertIn("通过 / 有条件通过 / 不通过 / 无法验证", narrative)
+        self.assertIn("PASS_WITH_LIMITATION", evidence)
+
+        role_protocol = (REFERENCES / "角色任务协议.md").read_text(encoding="utf-8")
+        for marker in ("给用户的话", "证据与标识", "PASS_WITH_LIMITATION"):
+            self.assertIn(marker, role_protocol)
+
+    def test_communication_glossary_and_dual_baseline_model_are_documented(self):
+        stage = (REFERENCES / "阶段执行协议.md").read_text(encoding="utf-8")
+        for marker in (
+            "黑话对照",
+            "PASS_WITH_LIMITATION",
+            "stale",
+            "owner baseline",
+            "must_fix",
+            "工作流 owner 基线",
+            "target_repo_baseline",
+            "related_change",
+            "route_invalidated: false",
+            "product_change: false",
+        ):
+            self.assertIn(marker, stage)
+
+        artifacts = (REFERENCES / "文档与产物契约.md").read_text(encoding="utf-8")
+        self.assertIn("工作流 owner 基线", artifacts)
+        self.assertIn("target_repo_baseline", artifacts)
+
+    def test_scenario_rubric_scores_confirmation_non_split_and_human_first_summary(self):
+        rubric = (ROOT / "tests" / "scenarios" / "results" / "RUBRIC.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("single_question_grill", rubric)
+        self.assertIn("用户确认记录", rubric)
+        self.assertIn("slice_quality", rubric)
+        self.assertIn("单任务", rubric)
+        self.assertIn("不拆", rubric)
+        self.assertIn("human_first_summary", rubric)
+
+        design = (ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+        self.assertIn("human_first_summary", design)
+
+        scenario = ROOT / "tests" / "scenarios" / "claude-code"
+        self.assertTrue((scenario / "human-first-artifacts.prompt.md").is_file())
+        self.assertTrue((scenario / "human-first-artifacts.expected.md").is_file())
 
     def test_route_card_stops_before_selection_and_repository_challenge_is_conclusive(self):
         route = self.read("路线卡.md")
@@ -319,12 +428,56 @@ class TemplateContractTests(unittest.TestCase):
         for field in ("关联需求雷达", "阻塞项已清零", "规格前验证项"):
             self.assertIn(field, baseline)
 
+        confirmation = self.read("用户确认记录.md")
+        for field in ("问题", "用户答复原文", "结果 DEC/RAD ID", "无需提问的理由"):
+            self.assertIn(field, confirmation)
+
     def test_review_has_independent_standards_and_spec_axes(self):
         review = self.read("审查任务.md")
         self.assertIn("Standards", review)
         self.assertIn("Spec", review)
         self.assertIn("完整文件", review)
         self.assertIn("真实 diff", review)
+        for marker in ("结构化 comments", "分类", "证据", "task-review", "review_history"):
+            self.assertIn(marker, review)
+
+        implementation = self.read("实施任务.md")
+        for marker in ("tdd", "测试 seam", "不使用理由"):
+            self.assertIn(marker, implementation)
+
+    def test_capability_orchestration_matrix_preserves_required_and_optional_boundaries(self):
+        matrix = (REFERENCES / "能力编排矩阵.md").read_text(encoding="utf-8")
+        for intent in (
+            "不理解 / 需人确认",
+            "巨大模糊工作",
+            "对齐后定规格",
+            "拆任务",
+            "逐切片实施",
+            "审查",
+        ):
+            self.assertIn(intent, matrix)
+        for capability in (
+            "grilling",
+            "wayfinder",
+            "to-spec",
+            "to-tickets",
+            "implement",
+            "tdd",
+            "code-review",
+        ):
+            self.assertIn(capability, matrix)
+        for required in ("grilling", "domain-modeling", "codebase-design"):
+            self.assertIn(required, matrix)
+        self.assertIn("其余能力全部可选", matrix)
+        self.assertIn("缺失不阻塞", matrix)
+        self.assertIn("阶段执行协议.md", matrix)
+
+        stage = (REFERENCES / "阶段执行协议.md").read_text(encoding="utf-8")
+        self.assertIn("能力编排矩阵.md", stage)
+
+        specification = self.read("规格.md")
+        for marker in ("用户问题与期望结果", "用户故事与场景", "实施决策", "测试决策"):
+            self.assertIn(marker, specification)
 
     def test_knowledge_templates_capture_boundaries_evidence_and_explicit_promotion(self):
         record = self.load_json_yaml("知识条目.yaml")

@@ -75,16 +75,23 @@ def _stored_project_directory(identity):
     index = common.read_yaml(index_path, default={})
     records = index.get("projects", ()) if isinstance(index, Mapping) else ()
     relocation_keys = set(identity.relocation_candidates)
-    matches = []
+    relocation_matches = []
+    history_matches = []
     if relocation_keys and isinstance(records, list):
         for record in records:
             if not isinstance(record, Mapping):
                 continue
             stored_keys = set(record.get("relocation_candidates", ()))
+            candidate = projects_root / str(record.get("directory_name", ""))
+            if not candidate.is_dir():
+                continue
             if relocation_keys.intersection(stored_keys):
-                candidate = projects_root / str(record.get("directory_name", ""))
-                if candidate.is_dir():
-                    matches.append(candidate)
+                relocation_matches.append(candidate)
+            elif _has_compatible_history(identity, record):
+                # Legacy indexes hash the complete root set. A transient root
+                # disappearing invalidates that hash even when history continues.
+                history_matches.append(candidate)
+    matches = relocation_matches or history_matches
     unique = sorted(set(matches))
     if len(unique) > 1:
         raise ValueError(
@@ -93,6 +100,31 @@ def _stored_project_directory(identity):
             )
         )
     return unique[0] if unique else exact
+
+
+def _has_compatible_history(identity, stored_record):
+    current_roots = set(identity.history_roots)
+    stored_roots = set(stored_record.get("history_roots", ()))
+    if not current_roots.intersection(stored_roots):
+        return False
+    current_remote = identity.normalized_remote
+    stored_remote = stored_record.get("normalized_remote")
+    return not current_remote or not stored_remote or current_remote == stored_remote
+
+
+def _project_records_are_relocation_compatible(existing, current):
+    return (
+        existing.get("directory_name") == current["directory_name"]
+        and existing.get("normalized_remote") == current["normalized_remote"]
+        and (
+            existing.get("history_roots") == current["history_roots"]
+            or bool(
+                set(existing.get("history_roots", ())).intersection(
+                    current.get("history_roots", ())
+                )
+            )
+        )
+    )
 
 
 def _discover_workflow(identity):
@@ -192,6 +224,57 @@ def _manifest_conflicts(workflow_path, workflow):
 
 def _workflow_root(workflow_path):
     return workflow_path.parent.parent if workflow_path.parent.name == "系统" else None
+
+
+def _non_blocking_hints(workflow_path, workflow):
+    hints = []
+    workflow_root = _workflow_root(workflow_path)
+    if workflow_root is not None:
+        confirmation_path = (
+            workflow_root / "过程产物" / "需求审问" / "用户确认记录.md"
+        )
+        if not confirmation_path.is_file():
+            hints.append(
+                {
+                    "code": "MISSING_USER_CONFIRMATION_RECORD",
+                    "message": "当前工作流缺少用户确认记录；请补充逐问原文或无需提问理由。",
+                    "path": str(confirmation_path),
+                }
+            )
+
+    phase_records = workflow.get("phases", ())
+    entered_implementation = isinstance(phase_records, list) and any(
+        isinstance(item, Mapping)
+        and item.get("id") in {"implementation", "independent_assurance"}
+        and item.get("status") not in UNENTERED_PHASE_STATES
+        for item in phase_records
+    )
+    if entered_implementation:
+        current_radar = {}
+        ledger = workflow.get("ledger", ())
+        if isinstance(ledger, list):
+            for item in ledger:
+                if (
+                    isinstance(item, Mapping)
+                    and item.get("type") == "RAD"
+                    and isinstance(item.get("id"), str)
+                ):
+                    current_radar[item["id"]] = item
+        open_radar_ids = sorted(
+            record_id
+            for record_id, item in current_radar.items()
+            if item.get("blocking_level") == "implementation"
+            and item.get("status") == "open"
+        )
+        if open_radar_ids:
+            hints.append(
+                {
+                    "code": "OPEN_IMPLEMENTATION_RADAR",
+                    "message": "已进入实施或独立保障，但仍有 implementation 级需求雷达未处置。",
+                    "radar_ids": open_radar_ids,
+                }
+            )
+    return hints
 
 
 def _phase_summary(workflow, reconciliation):
@@ -311,12 +394,26 @@ def _reconcile_workflow(
 
 
 def _identify(args):
-    identity = state.identify_project(Path(args.project))
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
     return 0, {"ok": True, "command": "identify", "project": _project_payload(identity)}
 
 
 def _preflight(args):
-    report = preflight.run_preflight(skill_roots=tuple(args.skill_root))
+    report = preflight.run_preflight(
+        skill_roots=tuple(args.skill_root),
+        optional_capabilities=(
+            "research",
+            "prototype",
+            "tdd",
+            "code-review",
+            "wayfinder",
+            "to-spec",
+            "to-tickets",
+            "implement",
+        ),
+    )
     return (0 if report["ready"] else 1), {
         "ok": report["ready"],
         "command": "preflight",
@@ -422,10 +519,8 @@ def _update_project_index(project_index_path, project_record):
         ]
         if matching and matching != [project_record]:
             existing = matching[0] if len(matching) == 1 else {}
-            relocation_compatible = (
-                existing.get("directory_name") == project_record["directory_name"]
-                and existing.get("normalized_remote") == project_record["normalized_remote"]
-                and existing.get("history_roots") == project_record["history_roots"]
+            relocation_compatible = _project_records_are_relocation_compatible(
+                existing, project_record
             )
             if not relocation_compatible:
                 raise ValueError(
@@ -518,9 +613,9 @@ def _initialize_workflow(
         if existing_project != project_record:
             relocation_compatible = (
                 existing_project.get("project_id") == project_record["project_id"]
-                and existing_project.get("directory_name") == project_record["directory_name"]
-                and existing_project.get("normalized_remote") == project_record["normalized_remote"]
-                and existing_project.get("history_roots") == project_record["history_roots"]
+                and _project_records_are_relocation_compatible(
+                    existing_project, project_record
+                )
             )
             if not relocation_compatible:
                 raise ValueError(
@@ -537,10 +632,8 @@ def _initialize_workflow(
         matching = [item for item in projects if isinstance(item, dict) and item.get("project_id") == identity.project_id]
         if matching and matching != [project_record]:
             existing = matching[0] if len(matching) == 1 else {}
-            relocation_compatible = (
-                existing.get("directory_name") == project_record["directory_name"]
-                and existing.get("normalized_remote") == project_record["normalized_remote"]
-                and existing.get("history_roots") == project_record["history_roots"]
+            relocation_compatible = _project_records_are_relocation_compatible(
+                existing, project_record
             )
             if not relocation_compatible:
                 raise ValueError(
@@ -666,18 +759,57 @@ def _reconcile(args):
         "ok": report["valid"],
         "command": "reconcile",
         "workflow_path": str(workflow_path),
+        "non_blocking_hints": _non_blocking_hints(workflow_path, workflow),
         "reconciliation": report,
     }
 
 
+def _baseline_reconcile(args):
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
+    workflow_path = _workflow_file(args.workflow)
+    workflow = _read_mapping(workflow_path, "workflow state")
+    if workflow.get("project_id") != identity.project_id:
+        raise ValueError("project does not own the selected workflow")
+    report = workflow_ops.reconcile_baseline(
+        workflow_path,
+        args.evidence_record,
+        args.approval_id,
+        current_baseline=_current_baseline(args.project, identity),
+        project_root=args.project,
+        task_ids=args.task,
+    )
+    return 0, {
+        "ok": True,
+        "command": "baseline-reconcile",
+        "baseline_reconciliation": report,
+    }
+
+
+def _invalidate_chain(args):
+    report = workflow_ops.invalidate_phase_chain(
+        args.workflow,
+        args.change_id,
+    )
+    return 0, {
+        "ok": True,
+        "command": "invalidate-chain",
+        "phase_invalidation": report,
+    }
+
+
 def _status(args):
-    identity = state.identify_project(Path(args.project))
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
     workflow_path = _workflow_file(args.workflow) if args.workflow else _discover_workflow(identity)
     base = {
         "ok": True,
         "command": "status",
         "project": _project_payload(identity),
         "workflow_path": str(workflow_path) if workflow_path else None,
+        "non_blocking_hints": [],
     }
     if workflow_path is None:
         base.update(
@@ -701,6 +833,7 @@ def _status(args):
         workflow_root=_workflow_root(workflow_path),
     )
     current, next_phase = _phase_summary(workflow, reconciliation)
+    base["non_blocking_hints"] = _non_blocking_hints(workflow_path, workflow)
     base.update(
         {
             "ok": reconciliation["valid"],
@@ -1027,7 +1160,9 @@ def _authorize_knowledge_mutation(args, operation):
 
 
 def _knowledge_query(args):
-    identity = state.identify_project(Path(args.project))
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
     report = knowledge.query_knowledge(
         identity.project_id,
         args.query,
@@ -1123,6 +1258,19 @@ def _parser():
     reconcile.add_argument("--workflow", required=True)
     reconcile.add_argument("--project")
     reconcile.set_defaults(handler=_reconcile)
+
+    baseline_reconcile = commands.add_parser("baseline-reconcile")
+    baseline_reconcile.add_argument("--workflow", required=True)
+    baseline_reconcile.add_argument("--project", required=True)
+    baseline_reconcile.add_argument("--evidence-record", required=True)
+    baseline_reconcile.add_argument("--approval-id", required=True)
+    baseline_reconcile.add_argument("--task", action="append", default=[])
+    baseline_reconcile.set_defaults(handler=_baseline_reconcile)
+
+    invalidate_chain = commands.add_parser("invalidate-chain")
+    invalidate_chain.add_argument("--workflow", required=True)
+    invalidate_chain.add_argument("--change-id", required=True)
+    invalidate_chain.set_defaults(handler=_invalidate_chain)
 
     upstream = commands.add_parser("upstream-check")
     upstream.add_argument("--previous")
