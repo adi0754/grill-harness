@@ -15,6 +15,7 @@ SCRIPTS = CLI.parent
 sys.path.insert(0, str(SCRIPTS))
 
 import grh
+import common
 import failure_control
 import state
 import workflow_ops
@@ -48,6 +49,47 @@ class WorkflowOperationTests(unittest.TestCase):
             "--workflow-key", "ops", "--created-date", "2026-07-12", env=env,
         )
         return env, Path(json.loads(result.stdout)["workflow_path"])
+
+    def _gate_approval_case(self, base, *, include_decision=True):
+        env, workflow = self._workflow(base)
+        approval_id = "DEC-900"
+        spec_path = workflow / "最终产物" / "最终规格.md"
+        spec_path.write_text("spec", encoding="utf-8")
+        artifact_record = workflow / "系统" / "atomic-approval-artifact.yaml"
+        artifact_record.write_text(
+            json.dumps({
+                "id": "ART-ATOMIC",
+                "status": "completed",
+                "version": 1,
+                "kind": "final-spec",
+                "currentness": "current",
+                "path": str(spec_path),
+                "decisions": [approval_id] if include_decision else [],
+            }),
+            encoding="utf-8",
+        )
+        registered = run_cli(
+            "record",
+            "--workflow",
+            str(workflow),
+            "--kind",
+            "artifact",
+            "--record",
+            str(artifact_record),
+            env=env,
+        )
+        self.assertEqual(registered.returncode, 0, registered.stdout)
+        decision = {
+            "id": approval_id,
+            "type": "DEC",
+            "version": 1,
+            "summary": "用户批准最终规格",
+            "status": "approved",
+            "approved_by": "user",
+            "gate": "final_spec_approval",
+            "artifact_versions": {"ART-ATOMIC": 1},
+        }
+        return env, workflow, decision
 
     def _baseline_reuse_case(
         self,
@@ -338,6 +380,174 @@ class WorkflowOperationTests(unittest.TestCase):
             self.assertIn("RAD-001", json.loads(result.stdout)["error"]["message"])
             self.assertNotEqual(before, before_approval)
             self.assertEqual(state_path.read_text(encoding="utf-8"), before_approval)
+
+    def test_approve_with_decision_record_commits_ledger_and_gate_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow, decision = self._gate_approval_case(Path(directory))
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(
+                    workflow_ops, "_write", wraps=workflow_ops._write
+                ) as write:
+                    report = workflow_ops.approve_gate(
+                        workflow,
+                        "final_spec_approval",
+                        "DEC-900",
+                        {"ART-ATOMIC": 1},
+                        decision_record=decision,
+                    )
+
+            self.assertEqual(write.call_count, 1)
+            self.assertEqual(report["approval_id"], "DEC-900")
+            persisted = json.loads(
+                (workflow / "系统" / "state.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(persisted["ledger"][-1], decision)
+            self.assertEqual(
+                persisted["gates"]["final_spec_approval"],
+                {
+                    "status": "approved",
+                    "approval_id": "DEC-900",
+                    "artifact_versions": {"ART-ATOMIC": 1},
+                },
+            )
+
+    def test_atomic_approval_rejects_mismatched_decision_fields_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow, decision = self._gate_approval_case(Path(directory))
+            tracked = [
+                workflow / "系统" / name
+                for name in (
+                    "state.yaml",
+                    "artifacts.yaml",
+                    "tasks.yaml",
+                    "evidence.yaml",
+                    "failures.yaml",
+                )
+            ] + [workflow / "核心文档" / "决策账本.yaml"]
+            before = {path: path.read_bytes() for path in tracked}
+            cases = (
+                ("gate", "route_selection", "gate"),
+                ("artifact_versions", {"ART-ATOMIC": 2}, "artifact_versions"),
+                ("status", "pending", "status"),
+                ("approved_by", "agent", "approved_by"),
+                ("id", "DEC-901", "approval id"),
+            )
+
+            for field, value, message in cases:
+                with self.subTest(field=field):
+                    candidate = dict(decision)
+                    candidate[field] = value
+                    with mock.patch.dict(os.environ, env, clear=False):
+                        with self.assertRaisesRegex(ValueError, message):
+                            workflow_ops.approve_gate(
+                                workflow,
+                                "final_spec_approval",
+                                "DEC-900",
+                                {"ART-ATOMIC": 1},
+                                decision_record=candidate,
+                            )
+                    self.assertEqual(
+                        {path: path.read_bytes() for path in tracked}, before
+                    )
+
+    def test_atomic_approval_requires_artifact_decision_link_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow, decision = self._gate_approval_case(
+                Path(directory), include_decision=False
+            )
+            tracked = [
+                workflow / "系统" / "state.yaml",
+                workflow / "系统" / "artifacts.yaml",
+                workflow / "核心文档" / "决策账本.yaml",
+            ]
+            before = {path: path.read_bytes() for path in tracked}
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                with self.assertRaisesRegex(ValueError, "新版产物"):
+                    workflow_ops.approve_gate(
+                        workflow,
+                        "final_spec_approval",
+                        "DEC-900",
+                        {"ART-ATOMIC": 1},
+                        decision_record=decision,
+                    )
+
+            self.assertEqual({path: path.read_bytes() for path in tracked}, before)
+
+    def test_atomic_approval_recovers_state_manifests_and_ledger_after_write_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow, decision = self._gate_approval_case(Path(directory))
+            tracked = [
+                workflow / "系统" / name
+                for name in (
+                    "state.yaml",
+                    "artifacts.yaml",
+                    "tasks.yaml",
+                    "evidence.yaml",
+                    "failures.yaml",
+                )
+            ] + [workflow / "核心文档" / "决策账本.yaml"]
+            before = {path: path.read_bytes() for path in tracked}
+            original_unlink = Path.unlink
+            failed = {"value": False}
+
+            def fail_first_journal_unlink(path, *args, **kwargs):
+                if (
+                    path.name == workflow_ops.TRANSACTION_FILE
+                    and not failed["value"]
+                ):
+                    failed["value"] = True
+                    raise OSError("simulated atomic approval write failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(Path, "unlink", fail_first_journal_unlink):
+                    with self.assertRaisesRegex(OSError, "atomic approval"):
+                        workflow_ops.approve_gate(
+                            workflow,
+                            "final_spec_approval",
+                            "DEC-900",
+                            {"ART-ATOMIC": 1},
+                            decision_record=decision,
+                        )
+
+            self.assertEqual({path: path.read_bytes() for path in tracked}, before)
+            self.assertFalse(
+                (workflow / "系统" / workflow_ops.TRANSACTION_FILE).exists()
+            )
+
+    def test_approve_without_decision_record_keeps_two_step_flow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow, decision = self._gate_approval_case(Path(directory))
+            decision_path = workflow / "系统" / "two-step-decision.yaml"
+            decision_path.write_text(json.dumps(decision), encoding="utf-8")
+            registered = run_cli(
+                "record",
+                "--workflow",
+                str(workflow),
+                "--kind",
+                "ledger",
+                "--record",
+                str(decision_path),
+                env=env,
+            )
+            self.assertEqual(registered.returncode, 0, registered.stdout)
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                workflow_ops.approve_gate(
+                    workflow,
+                    "final_spec_approval",
+                    "DEC-900",
+                    {"ART-ATOMIC": 1},
+                )
+
+            persisted = json.loads(
+                (workflow / "系统" / "state.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                [item["id"] for item in persisted["ledger"]].count("DEC-900"), 1
+            )
 
     def test_mutations_refuse_paths_outside_harness_storage(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1841,6 +2051,84 @@ class WorkflowOperationTests(unittest.TestCase):
             self.assertFalse(
                 (workflow / "系统" / workflow_ops.TRANSACTION_FILE).exists()
             )
+
+    def test_successful_workflow_write_removes_transaction_backup_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow = self._workflow(Path(directory))
+            state_path = workflow / "系统" / "state.yaml"
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                current, manifests = workflow_ops._load(state_path)
+                workflow_ops._write(state_path, current, manifests)
+
+            transaction_root = workflow / "系统" / "事务备份"
+            self.assertEqual(list(transaction_root.iterdir()), [])
+
+    def test_interrupted_write_restores_before_cleaning_transaction_backups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow = self._workflow(Path(directory))
+            system = workflow / "系统"
+            state_path = system / "state.yaml"
+            before = state_path.read_bytes()
+            transaction_root = system / "事务备份"
+            active = transaction_root / "active"
+            active.mkdir(parents=True)
+            backup = active / "state.bak"
+            backup.write_bytes(before)
+            orphan = transaction_root / "orphan"
+            orphan.mkdir()
+            (orphan / "unused.bak").write_bytes(b"orphan")
+            state_path.write_text('{"mutated": true}', encoding="utf-8")
+            common.atomic_write_yaml(
+                system / workflow_ops.TRANSACTION_FILE,
+                {
+                    "operation": "workflow-write",
+                    "targets": {"state": str(state_path)},
+                    "backups": {"state": str(backup)},
+                },
+            )
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                recovered = workflow_ops._recover_interrupted_write(state_path)
+
+            self.assertTrue(recovered)
+            self.assertEqual(state_path.read_bytes(), before)
+            self.assertEqual(list(transaction_root.iterdir()), [])
+
+    def test_recovery_without_journal_removes_orphan_transaction_backups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow = self._workflow(Path(directory))
+            system = workflow / "系统"
+            transaction_root = system / "事务备份"
+            orphan = transaction_root / "orphan"
+            orphan.mkdir(parents=True)
+            (orphan / "unused.bak").write_bytes(b"orphan")
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                recovered = workflow_ops._recover_interrupted_write(
+                    system / "state.yaml"
+                )
+
+            self.assertFalse(recovered)
+            self.assertEqual(list(transaction_root.iterdir()), [])
+
+    def test_transaction_cleanup_never_touches_migration_backups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow = self._workflow(Path(directory))
+            system = workflow / "系统"
+            migration_backup = system / "备份" / "migration-001"
+            migration_backup.mkdir(parents=True)
+            sentinel = migration_backup / "state.yaml"
+            sentinel.write_bytes(b"migration backup")
+            orphan = system / "事务备份" / "orphan"
+            orphan.mkdir(parents=True)
+            (orphan / "unused.bak").write_bytes(b"orphan")
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                workflow_ops._recover_interrupted_write(system / "state.yaml")
+
+            self.assertEqual(sentinel.read_bytes(), b"migration backup")
+            self.assertEqual(list((system / "事务备份").iterdir()), [])
 
 
 if __name__ == "__main__":

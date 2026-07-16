@@ -62,9 +62,9 @@ def _gate_is_approved(gate):
 
 
 def _phase_recommendation(phase):
-    if phase in {"preflight", "alignment", "requirements_baseline", "route_selection"}:
+    if phase in {"preflight", "alignment", "requirements_baseline", "design", "route_selection"}:
         return "grh-start"
-    if phase in {"design", "repository_challenge", "specification", "final_spec_approval"}:
+    if phase in {"repository_challenge", "specification", "final_spec_approval"}:
         return "grh-plan"
     if phase in {"tasking", "implementation"}:
         return "grh-run"
@@ -101,10 +101,12 @@ def evaluate_entry_request(entry_name, workflow, reconciliation, requested_scope
         if requested
         else allowed_operations
     )
+    unknown_scope = [
+        item for item in requested
+        if item not in allowed_operations and item not in contract["forbidden_operations"]
+    ]
     forbidden_scope = list(contract["forbidden_operations"])
-    forbidden_scope.extend(
-        item for item in requested if item not in allowed_operations and item not in forbidden_scope
-    )
+    forbidden_scope.extend(item for item in unknown_scope if item not in forbidden_scope)
 
     status = workflow.get("status")
     gates = workflow.get("gates", {})
@@ -157,12 +159,18 @@ def evaluate_entry_request(entry_name, workflow, reconciliation, requested_scope
             reason_code = "phase_not_allowed"
             recommended_entry = _phase_recommendation(next_phase or current_phase)
 
+    if eligible and requested and not allowed_scope:
+        eligible = False
+        reason_code = "requested_scope_not_allowed"
+        recommended_entry = None
+
     return {
         "entry": entry_name,
         "eligible": eligible,
         "reason_code": reason_code,
         "missing_prerequisites": missing,
         "allowed_scope": allowed_scope,
+        "unknown_scope": unknown_scope,
         "forbidden_scope": forbidden_scope,
         "recommended_entry": recommended_entry,
         "will_auto_route": False,

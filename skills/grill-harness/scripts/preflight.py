@@ -1,8 +1,13 @@
 """Read-only dependency preflight for Grill Harness."""
 
+import getpass
+import hashlib
 import json
+import os
 import re
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 import entry_contract
@@ -13,11 +18,110 @@ COMPATIBILITY_REFERENCES = ("grill-with-docs",)
 PUBLIC_ENTRIES = tuple(entry_contract.PUBLIC_ENTRIES)
 ENTRY_CORE_CONTRACT_VERSION = entry_contract.ENTRY_CORE_CONTRACT_VERSION
 EXPECTED_CORE_SCRIPT = "scripts/grh.py"
+DEFAULT_RUNNER_TIMEOUT_SECONDS = 20
+INVENTORY_CACHE_TTL_SECONDS = 600
+INVENTORY_CACHE_VERSION = 1
 
 
-def _default_runner(command):
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+def _default_runner(command, timeout=DEFAULT_RUNNER_TIMEOUT_SECONDS):
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        return {
+            "returncode": 124,
+            "stdout": error.stdout or "",
+            "stderr": "command timed out after {} seconds".format(timeout),
+        }
     return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+
+
+def _cache_root_identity(skill_roots):
+    if isinstance(skill_roots, dict):
+        roots = [
+            (str(scope), str(Path(path).expanduser().resolve()))
+            for scope, paths in skill_roots.items()
+            for path in paths
+        ]
+    else:
+        roots = [
+            ("unknown", str(Path(path).expanduser().resolve()))
+            for path in skill_roots
+        ]
+    if not roots:
+        roots = [("installed", str(Path(__file__).resolve().parents[2]))]
+    return sorted(roots)
+
+
+def _default_inventory_cache_path(skill_roots):
+    identity = "{}\0{}".format(
+        getpass.getuser(),
+        json.dumps(_cache_root_identity(skill_roots), ensure_ascii=True),
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / "grh-preflight-inventory-{}.json".format(digest)
+
+
+def _read_inventory_cache(cache_path, current_time, ttl_seconds):
+    try:
+        payload = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+        cached_at = payload.get("cached_at")
+        entries = payload.get("entries")
+        if (
+            payload.get("version") != INVENTORY_CACHE_VERSION
+            or not isinstance(cached_at, (int, float))
+            or isinstance(cached_at, bool)
+            or not isinstance(entries, list)
+            or any(not isinstance(item, dict) for item in entries)
+        ):
+            return None
+        age = current_time - cached_at
+        if age < 0 or age > ttl_seconds:
+            return None
+        return [dict(item) for item in entries]
+    except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _write_inventory_cache(cache_path, entries, current_time):
+    temporary_path = None
+    try:
+        cache_path = Path(cache_path)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(cache_path.parent),
+            prefix=".{}-".format(cache_path.name),
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(
+                {
+                    "version": INVENTORY_CACHE_VERSION,
+                    "cached_at": current_time,
+                    "entries": entries,
+                },
+                temporary,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        os.replace(str(temporary_path), str(cache_path))
+        temporary_path = None
+    except (OSError, UnicodeError, TypeError, ValueError):
+        pass
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _metadata_name(skill_file):
@@ -71,7 +175,7 @@ def _cli_inventory(runner):
     for command, scope in commands:
         try:
             response = runner(command)
-        except (FileNotFoundError, OSError) as error:
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as error:
             errors.append("{}: {}".format(scope, error))
             failed_scopes.append(scope)
             continue
@@ -246,7 +350,7 @@ def verify_public_entries(inventory, invoking_entry=None):
 def _safe_top_level_help(runner):
     try:
         response = runner(["npx", "skills", "--help"])
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if not response or response.get("returncode") != 0:
         return None
@@ -284,11 +388,37 @@ def run_preflight(
     optional_capabilities=(),
     check_harness_entries=False,
     invoking_entry=None,
+    cache_path=None,
+    now=None,
+    cache_ttl_seconds=INVENTORY_CACHE_TTL_SECONDS,
+    refresh_cache=False,
 ):
     """Discover, verify, and report capabilities without changing the system."""
 
+    cache_enabled = runner is None or cache_path is not None
     runner = _default_runner if runner is None else runner
-    cli_complete, cli_entries, cli_error, failed_scopes = _cli_inventory(runner)
+    current_time = time.time() if now is None else float(now)
+    effective_cache_path = (
+        _default_inventory_cache_path(skill_roots)
+        if cache_path is None
+        else Path(cache_path)
+    )
+    cached_entries = None
+    if cache_enabled and not refresh_cache:
+        cached_entries = _read_inventory_cache(
+            effective_cache_path, current_time, cache_ttl_seconds
+        )
+    if cached_entries is None:
+        cli_complete, cli_entries, cli_error, failed_scopes = _cli_inventory(runner)
+        inventory_source = "json-first"
+        if cache_enabled and cli_complete:
+            _write_inventory_cache(effective_cache_path, cli_entries, current_time)
+    else:
+        cli_complete = True
+        cli_entries = cached_entries
+        cli_error = None
+        failed_scopes = ()
+        inventory_source = "cache"
     cli_available = cli_complete or bool(cli_entries)
     inventory = list(cli_entries)
     if not cli_complete:
@@ -338,7 +468,7 @@ def run_preflight(
     entry_ready = harness_installation["entry_ready"]
     install_commands = []
     update_commands = []
-    if cli_available:
+    if cli_available and missing_required:
         help_text = _safe_top_level_help(runner)
         command = _batch_command(help_text, missing_required)
         install_commands = [command] if command else []
@@ -352,7 +482,7 @@ def run_preflight(
             "available": cli_available,
             "complete": cli_complete,
             "error": cli_error,
-            "inventory_source": "json-first",
+            "inventory_source": inventory_source,
         },
         "capabilities": capabilities,
         "missing_required": missing_required,

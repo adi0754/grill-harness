@@ -10,6 +10,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLI = REPO_ROOT / "skills" / "grill-harness" / "scripts" / "grh.py"
+sys.path.insert(0, str(CLI.parent))
+
+import grh
 
 
 def run_cli(*arguments, env=None):
@@ -433,6 +436,37 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertFalse(payload["decision"]["will_auto_route"])
             self.assertFalse(root.exists())
 
+    def test_entry_check_fails_closed_for_unknown_requested_scope(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            entries = (
+                "grill-harness", "grh-start", "grh-plan", "grh-run", "grh-check",
+                "grh-recover", "grh-learn", "grh-upstream-check",
+            )
+            _, cli = self._isolated_harness(
+                base, entries, required_capabilities=True
+            )
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env.update({"GRILL_HARNESS_TEST_ROOT": str(root), "PATH": ""})
+            scope = "只完成仓库挑战，不修改产品代码"
+
+            result = run_cli_at(
+                cli,
+                "entry-check", "--entry", "grh-start", "--project", str(project),
+                "--requested-scope", scope, env=env,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["decision"]["reason_code"], "requested_scope_not_allowed"
+            )
+            self.assertEqual(payload["decision"]["unknown_scope"], [scope])
+            self.assertFalse(root.exists())
+
     def test_entry_check_blocks_run_when_workflow_has_not_started(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
@@ -535,6 +569,109 @@ class GrillHarnessCliTests(unittest.TestCase):
                 self.assertEqual(payload["command"], command)
                 self.assertEqual(payload["error"]["type"], "usage")
 
+    def test_refresh_preflight_flag_is_available_to_preflight_and_entry_check(self):
+        preflight_args = grh._parser().parse_args(
+            ["preflight", "--refresh-preflight"]
+        )
+        entry_args = grh._parser().parse_args(
+            [
+                "entry-check",
+                "--entry",
+                "grh-start",
+                "--project",
+                "C:/project",
+                "--refresh-preflight",
+            ]
+        )
+
+        self.assertTrue(preflight_args.refresh_preflight)
+        self.assertTrue(entry_args.refresh_preflight)
+
+    def test_approve_accepts_decision_record_for_one_step_gate_binding(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            project = base / "project"
+            project.mkdir()
+            storage = base / "storage"
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(storage)
+            initialized = run_cli(
+                "init",
+                "--project",
+                str(project),
+                "--workflow-name",
+                "原子批准",
+                "--created-date",
+                "2026-07-12",
+                env=env,
+            )
+            workflow = Path(json.loads(initialized.stdout)["workflow_path"])
+            spec_path = workflow / "最终产物" / "最终规格.md"
+            spec_path.write_text("spec", encoding="utf-8")
+            artifact_record = workflow / "系统" / "atomic-artifact.yaml"
+            artifact_record.write_text(
+                json.dumps({
+                    "id": "ART-ATOMIC",
+                    "status": "completed",
+                    "version": 1,
+                    "kind": "final-spec",
+                    "currentness": "current",
+                    "path": str(spec_path),
+                    "decisions": ["DEC-900"],
+                }),
+                encoding="utf-8",
+            )
+            registered = run_cli(
+                "record",
+                "--workflow",
+                str(workflow),
+                "--kind",
+                "artifact",
+                "--record",
+                str(artifact_record),
+                env=env,
+            )
+            decision_record = workflow / "系统" / "atomic-decision.yaml"
+            decision_record.write_text(
+                json.dumps({
+                    "id": "DEC-900",
+                    "type": "DEC",
+                    "version": 1,
+                    "summary": "用户批准最终规格",
+                    "status": "approved",
+                    "approved_by": "user",
+                    "gate": "final_spec_approval",
+                    "artifact_versions": {"ART-ATOMIC": 1},
+                }),
+                encoding="utf-8",
+            )
+
+            approved = run_cli(
+                "approve",
+                "--workflow",
+                str(workflow),
+                "--gate",
+                "final_spec_approval",
+                "--approval-id",
+                "DEC-900",
+                "--artifact-version",
+                "ART-ATOMIC=1",
+                "--decision-record",
+                str(decision_record),
+                env=env,
+            )
+
+            self.assertEqual(registered.returncode, 0, registered.stdout)
+            self.assertEqual(approved.returncode, 0, approved.stdout)
+            persisted = json.loads(
+                (workflow / "系统" / "state.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(persisted["ledger"][-1]["id"], "DEC-900")
+            self.assertEqual(
+                persisted["gates"]["final_spec_approval"]["approval_id"],
+                "DEC-900",
+            )
+
     def test_identify_emits_project_identity_as_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir) / "project"
@@ -601,6 +738,133 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertTrue(payload["reconciliation"]["valid"])
             self.assertEqual(payload["next_eligible_phase"], "preflight")
             self.assertFalse(root.exists())
+
+    def test_overview_lists_two_workflows_without_writes_or_migrations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            for name, key in (("工作流一", "one"), ("工作流二", "two")):
+                initialized = run_cli(
+                    "init",
+                    "--project",
+                    str(project),
+                    "--workflow-name",
+                    name,
+                    "--workflow-key",
+                    key,
+                    "--created-date",
+                    "2026-07-12",
+                    env=env,
+                )
+                self.assertEqual(
+                    initialized.returncode, 0, initialized.stdout + initialized.stderr
+                )
+            before = {
+                path: path.read_bytes() for path in root.rglob("*") if path.is_file()
+            }
+
+            result = run_cli("overview", "--project", str(project), env=env)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["command"], "overview")
+            self.assertEqual(
+                [item["workflow_name"] for item in payload["workflows"]],
+                ["工作流一", "工作流二"],
+            )
+            for item in payload["workflows"]:
+                self.assertEqual(item["current_phase"], "preflight")
+                self.assertEqual(item["frontier_count"], 0)
+                self.assertEqual(
+                    item["gate_statuses"],
+                    {gate: "missing" for gate in grh.state.HUMAN_GATES},
+                )
+            after = {
+                path: path.read_bytes() for path in root.rglob("*") if path.is_file()
+            }
+            self.assertEqual(after, before)
+
+    def test_status_projects_latest_completed_current_artifact_per_kind_read_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            project = base / "project"
+            project.mkdir()
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            initialized = run_cli(
+                "init",
+                "--project",
+                str(project),
+                "--workflow-name",
+                "当前产物投影",
+                "--workflow-key",
+                "current-artifacts",
+                "--created-date",
+                "2026-07-12",
+                env=env,
+            )
+            workflow = Path(json.loads(initialized.stdout)["workflow_path"])
+            artifacts = []
+            for artifact_id, version, status, currentness in (
+                ("ART-OLD", 1, "completed", "current"),
+                ("ART-NEW", 2, "completed", "current"),
+                ("ART-DRAFT", 3, "needs_user", "current"),
+                ("ART-STALE", 4, "completed", "stale"),
+            ):
+                path = workflow / "过程产物" / "{}.md".format(artifact_id)
+                path.write_text(artifact_id, encoding="utf-8")
+                artifacts.append({
+                    "id": artifact_id,
+                    "version": version,
+                    "status": status,
+                    "currentness": currentness,
+                    "kind": "analysis",
+                    "path": str(path),
+                    "decisions": [],
+                })
+            state_path = workflow / "系统" / "state.yaml"
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+            state_payload["artifacts"] = artifacts
+            state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+            manifest_path = workflow / "系统" / "artifacts.yaml"
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_payload["artifacts"] = artifacts
+            manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+            before = {
+                path: path.read_bytes() for path in root.rglob("*") if path.is_file()
+            }
+
+            result = run_cli(
+                "status",
+                "--project",
+                str(project),
+                "--workflow",
+                str(workflow),
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["current_artifacts"],
+                {
+                    "analysis": {
+                        "id": "ART-NEW",
+                        "version": 2,
+                        "path": str(workflow / "过程产物" / "ART-NEW.md"),
+                    }
+                },
+            )
+            after = {
+                path: path.read_bytes() for path in root.rglob("*") if path.is_file()
+            }
+            self.assertEqual(after, before)
 
     def test_status_and_reconcile_report_missing_user_confirmation_as_non_blocking(self):
         with tempfile.TemporaryDirectory() as temp_dir:

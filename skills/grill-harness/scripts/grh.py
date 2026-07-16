@@ -17,6 +17,7 @@ import knowledge
 import migration
 import preflight
 import state
+import task_graph
 import upstream_check
 import validate
 import workflow_ops
@@ -127,9 +128,13 @@ def _project_records_are_relocation_compatible(existing, current):
     )
 
 
-def _discover_workflow(identity):
+def _discover_workflows(identity):
     workflows = _stored_project_directory(identity) / "工作流"
-    candidates = sorted(workflows.glob("*/系统/state.yaml")) if workflows.is_dir() else []
+    return sorted(workflows.glob("*/系统/state.yaml")) if workflows.is_dir() else []
+
+
+def _discover_workflow(identity):
+    candidates = _discover_workflows(identity)
     if len(candidates) > 1:
         raise ValueError(
             "multiple workflows found; pass --workflow: {}".format(
@@ -336,6 +341,42 @@ def _phase_summary(workflow, reconciliation):
     return current, None
 
 
+def _current_artifact_projection(workflow):
+    selected = {}
+    artifacts = workflow.get("artifacts", ())
+    if not isinstance(artifacts, list):
+        return {}
+    for artifact in artifacts:
+        if not isinstance(artifact, Mapping):
+            continue
+        kind = artifact.get("kind")
+        artifact_id = artifact.get("id")
+        version = artifact.get("version")
+        if (
+            artifact.get("status") != "completed"
+            or artifact.get("currentness") != "current"
+            or not isinstance(kind, str)
+            or not kind.strip()
+            or not isinstance(artifact_id, str)
+            or not artifact_id.strip()
+            or isinstance(version, bool)
+            or not isinstance(version, int)
+            or version < 1
+        ):
+            continue
+        order = (version, artifact_id)
+        if kind not in selected or order > selected[kind][0]:
+            selected[kind] = (
+                order,
+                {
+                    "id": artifact_id,
+                    "version": version,
+                    "path": artifact.get("path"),
+                },
+            )
+    return {kind: selected[kind][1] for kind in sorted(selected)}
+
+
 def _reconcile_workflow(
     workflow,
     *,
@@ -413,6 +454,7 @@ def _preflight(args):
             "to-tickets",
             "implement",
         ),
+        refresh_cache=args.refresh_preflight,
     )
     return (0 if report["ready"] else 1), {
         "ok": report["ready"],
@@ -818,6 +860,7 @@ def _status(args):
                 "current_phase": None,
                 "next_eligible_phase": "preflight",
                 "gates": {},
+                "current_artifacts": {},
                 "reconciliation": {"valid": True, "conflicts": []},
             }
         )
@@ -841,6 +884,7 @@ def _status(args):
             "current_phase": current,
             "next_eligible_phase": next_phase,
             "gates": workflow.get("gates", {}),
+            "current_artifacts": _current_artifact_projection(workflow),
             "phases": workflow.get("phases", []),
             "evidence": workflow.get("evidence", []),
             "archive_confirmation": workflow.get("archive_confirmation"),
@@ -848,6 +892,53 @@ def _status(args):
         }
     )
     return (0 if reconciliation["valid"] else 1), base
+
+
+def _overview(args):
+    """List every stored workflow for one project without changing state."""
+
+    identity = _identity_for_stored_project(
+        state.identify_project(Path(args.project))
+    )
+    baseline = _current_baseline(args.project, identity)
+    current_time = datetime.now(timezone.utc).isoformat()
+    workflows = []
+    for workflow_path in _discover_workflows(identity):
+        workflow = _read_mapping(workflow_path, "workflow state")
+        reconciliation = _reconcile_workflow(
+            workflow,
+            current_baseline=baseline,
+            current_time=current_time,
+            manifest_conflicts=_manifest_conflicts(workflow_path, workflow),
+            workflow_root=_workflow_root(workflow_path),
+        )
+        current_phase, _ = _phase_summary(workflow, reconciliation)
+        gates = workflow.get("gates", {})
+        if not isinstance(gates, Mapping):
+            gates = {}
+        frontier = task_graph.calculate_frontier(workflow.get("tasks", ()))
+        workflows.append(
+            {
+                "workflow_name": workflow.get("workflow_name"),
+                "workflow_path": str(workflow_path),
+                "current_phase": current_phase,
+                "gate_statuses": {
+                    gate: (
+                        gates[gate].get("status", "missing")
+                        if isinstance(gates.get(gate), Mapping)
+                        else "missing"
+                    )
+                    for gate in state.HUMAN_GATES
+                },
+                "frontier_count": len(frontier["frontier"]),
+            }
+        )
+    return 0, {
+        "ok": True,
+        "command": "overview",
+        "project": _project_payload(identity),
+        "workflows": workflows,
+    }
 
 
 def _entry_check(args):
@@ -858,6 +949,7 @@ def _entry_check(args):
         skill_roots=(installed_skills_root,),
         check_harness_entries=True,
         invoking_entry=args.entry,
+        refresh_cache=args.refresh_preflight,
     )
     _, status_report = _status(args)
     decision = entry_contract.evaluate_entry_request(
@@ -1029,8 +1121,17 @@ def _record(args):
 
 def _approve(args):
     versions = workflow_ops.parse_artifact_versions(args.artifact_version)
+    decision_record = (
+        _read_mapping(args.decision_record, "decision record")
+        if args.decision_record
+        else None
+    )
     report = workflow_ops.approve_gate(
-        args.workflow, args.gate, args.approval_id, versions
+        args.workflow,
+        args.gate,
+        args.approval_id,
+        versions,
+        decision_record=decision_record,
     )
     return 0, {"ok": True, "command": "approve", "approval": report}
 
@@ -1233,6 +1334,7 @@ def _parser():
 
     preflight_command = commands.add_parser("preflight")
     preflight_command.add_argument("--skill-root", action="append", default=[])
+    preflight_command.add_argument("--refresh-preflight", action="store_true")
     preflight_command.set_defaults(handler=_preflight)
 
     init = commands.add_parser("init")
@@ -1247,11 +1349,16 @@ def _parser():
     status.add_argument("--workflow")
     status.set_defaults(handler=_status)
 
+    overview = commands.add_parser("overview")
+    overview.add_argument("--project", required=True)
+    overview.set_defaults(handler=_overview)
+
     entry_check = commands.add_parser("entry-check")
     entry_check.add_argument("--entry", choices=sorted(entry_contract.PUBLIC_ENTRIES), required=True)
     entry_check.add_argument("--project", required=True)
     entry_check.add_argument("--workflow")
     entry_check.add_argument("--requested-scope", action="append", default=[])
+    entry_check.add_argument("--refresh-preflight", action="store_true")
     entry_check.set_defaults(handler=_entry_check)
 
     reconcile = commands.add_parser("reconcile")
@@ -1300,6 +1407,7 @@ def _parser():
     approve.add_argument("--gate", choices=state.HUMAN_GATES, required=True)
     approve.add_argument("--approval-id", required=True)
     approve.add_argument("--artifact-version", action="append", default=[], required=True)
+    approve.add_argument("--decision-record")
     approve.set_defaults(handler=_approve)
 
     transition = commands.add_parser("transition")

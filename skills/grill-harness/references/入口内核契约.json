@@ -20,9 +20,9 @@
     },
     "grh-start": {
       "kind": "workflow-entry",
-      "allowed_phases": ["preflight", "alignment", "requirements_baseline", "route_selection"],
+      "allowed_phases": ["preflight", "alignment", "requirements_baseline", "design", "route_selection"],
       "required_gates": [],
-      "allowed_operations": ["inspect_repository", "clarify_requirements", "baseline_requirements", "select_route"],
+      "allowed_operations": ["inspect_repository", "clarify_requirements", "baseline_requirements", "select_route", "research", "prototype"],
       "forbidden_operations": ["implementation", "final_acceptance", "auto_route"],
       "stop_boundary": "Stop after the user selects a route.",
       "next_entry_suggestions": ["grh-plan", "grh-recover"],
@@ -76,7 +76,7 @@
     },
     "grh-recover": {
       "kind": "situational-entry",
-      "allowed_phases": ["alignment", "route_selection", "repository_challenge", "specification", "implementation", "independent_assurance"],
+      "allowed_phases": ["preflight", "alignment", "requirements_baseline", "design", "route_selection", "repository_challenge", "specification", "final_spec_approval", "tasking", "implementation", "independent_assurance", "knowledge_archive"],
       "required_gates": [],
       "allowed_operations": ["diagnose_drift", "reconcile", "invalidate_phase_chain", "propose_route"],
       "forbidden_operations": ["auto_switch_route", "auto_route"],

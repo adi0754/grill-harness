@@ -45,7 +45,7 @@ description: Use as the Grill Harness router when the user asks for workflow sta
 | 依赖或上游兼容性检查 | `grh-upstream-check` | 给出只读入口建议后停止 |
 | 状态、下一步、不确定该用哪个入口 | `grill-harness` | 只读报告并推荐一个入口 |
 
-用户明确指定公开入口时尊重该意图，不用自然语言重新改道；仍须调用 `entry-check`，状态资格和硬门禁可以阻止该入口。自然语言未指定入口时，Router 根据真实 `status` / `reconcile` 结果推荐入口，但不执行完整阶段、不自动调用下一入口。用户指定比入口更窄的范围时，作为 `--requested-scope` 传入，只能缩小权限。
+用户明确指定公开入口时尊重该意图，不用自然语言重新改道；仍须调用 `entry-check`，状态资格和硬门禁可以阻止该入口。自然语言未指定入口时，Router 根据真实 `status` / `reconcile` 结果推荐入口，但不执行完整阶段、不自动调用下一入口。`--requested-scope` 只接受入口契约 `allowed_operations` 中的操作名；用户的自然语言限制写入任务说明与用户确认记录，不得作为 scope 传入，未知 scope 会失败关闭。
 
 所有 references 都位于 `references/`，直接从本文件加载，不依赖嵌套查找。
 

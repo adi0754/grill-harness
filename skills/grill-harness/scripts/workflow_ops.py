@@ -77,10 +77,25 @@ def _load(state_path):
     return workflow, manifests
 
 
+def _cleanup_transaction_backups(state_path):
+    transaction_root = state_path.parent / "事务备份"
+    try:
+        children = list(transaction_root.iterdir())
+    except OSError:
+        return
+    for child in children:
+        try:
+            if child.is_dir():
+                shutil.rmtree(str(child), ignore_errors=True)
+        except OSError:
+            continue
+
+
 def _recover_interrupted_write(state_path):
     journal_path = state_path.parent / TRANSACTION_FILE
     journal = common.read_yaml(journal_path)
     if journal is None:
+        _cleanup_transaction_backups(state_path)
         return False
     if not isinstance(journal, dict) or not isinstance(journal.get("targets"), dict):
         raise ValueError("workflow transaction journal is corrupt")
@@ -95,6 +110,7 @@ def _recover_interrupted_write(state_path):
             raise ValueError("workflow transaction backup is missing: {}".format(backup))
         shutil.copy2(str(backup), str(target))
     journal_path.unlink(missing_ok=True)
+    _cleanup_transaction_backups(state_path)
     return True
 
 
@@ -509,6 +525,7 @@ def _write(state_path, workflow, manifests, extra_payloads=None):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(str(temporary_paths[key]), str(target))
             journal_path.unlink(missing_ok=True)
+            shutil.rmtree(str(backup_directory), ignore_errors=True)
         except OSError:
             _recover_interrupted_write(state_path)
             raise
@@ -1113,7 +1130,55 @@ def invalidate_phase_chain(workflow_value, change_id):
     }
 
 
-def approve_gate(workflow_value, gate, approval_id, artifact_versions):
+def _validated_gate_decision(
+    workflow, gate, approval_id, artifact_versions, decision_record
+):
+    if not isinstance(decision_record, dict):
+        raise ValueError("decision record must be a mapping")
+    record = copy.deepcopy(decision_record)
+    if record.get("gate") != gate:
+        raise ValueError("decision record gate does not match --gate")
+    if record.get("artifact_versions") != dict(artifact_versions):
+        raise ValueError(
+            "decision record artifact_versions do not match --artifact-version"
+        )
+    if record.get("status") != "approved":
+        raise ValueError("decision record status must be approved")
+    if record.get("approved_by") != "user":
+        raise ValueError("decision record approved_by must be user")
+    if record.get("id") != approval_id:
+        raise ValueError("decision record approval id does not match --approval-id")
+    ledger = workflow.get("ledger")
+    if not isinstance(ledger, list):
+        raise ValueError("ledger must be a list")
+    updated_ledger = list(ledger) + [record]
+    state.validate_ledger(updated_ledger)
+    artifacts = {
+        item.get("id"): item
+        for item in workflow.get("artifacts", ())
+        if isinstance(item, dict)
+    }
+    for artifact_id, version in artifact_versions.items():
+        artifact = artifacts.get(artifact_id)
+        if (
+            not isinstance(artifact, dict)
+            or artifact.get("version") != version
+            or approval_id not in artifact.get("decisions", ())
+        ):
+            raise ValueError(
+                "target artifact decisions do not include {}; "
+                "请补登记包含该 approval_id 的新版产物后重试".format(approval_id)
+            )
+    return updated_ledger
+
+
+def approve_gate(
+    workflow_value,
+    gate,
+    approval_id,
+    artifact_versions,
+    decision_record=None,
+):
     if gate not in state.HUMAN_GATES:
         raise ValueError("unknown human gate: {}".format(gate))
     state_path = _state_path(workflow_value)
@@ -1131,6 +1196,14 @@ def approve_gate(workflow_value, gate, approval_id, artifact_versions):
                     )
                 )
         updated = dict(workflow)
+        if decision_record is not None:
+            updated["ledger"] = _validated_gate_decision(
+                workflow,
+                gate,
+                approval_id,
+                artifact_versions,
+                decision_record,
+            )
         gates = dict(workflow.get("gates", {}))
         gates[gate] = {
             "status": "approved",

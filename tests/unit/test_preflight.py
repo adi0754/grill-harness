@@ -1,8 +1,11 @@
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "skills" / "grill-harness" / "scripts"
@@ -90,6 +93,19 @@ class PreflightTests(unittest.TestCase):
             script.parent.mkdir(parents=True)
             script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
         return entries
+
+    def test_default_runner_times_out_without_raising(self):
+        timeout = subprocess.TimeoutExpired(
+            ["npx", "skills", "list", "--json"], 20
+        )
+        with mock.patch.object(subprocess, "run", side_effect=timeout) as run:
+            response = preflight._default_runner(
+                ["npx", "skills", "list", "--json"]
+            )
+
+        self.assertEqual(response["returncode"], 124)
+        self.assertIn("timed out", response["stderr"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 20)
 
     def test_complete_public_installation_is_entry_ready_without_changing_dependency_ready(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -375,6 +391,108 @@ class PreflightTests(unittest.TestCase):
             self.assertTrue(all(item["scope"] == "global" for item in report["capabilities"] if item["verified"]))
             self.assertFalse(report["actions_performed"])
 
+    def test_timed_out_scope_uses_filesystem_fallback_without_raising(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in preflight.REQUIRED_CAPABILITIES:
+                self._skill(root, name)
+            runner = FakeRunner({
+                ("npx", "skills", "list", "--json"): subprocess.TimeoutExpired(
+                    ["npx", "skills", "list", "--json"], 20
+                ),
+                ("npx", "skills", "list", "-g", "--json"): {
+                    "returncode": 0,
+                    "stdout": json.dumps({"skills": []}),
+                },
+            })
+
+            report = preflight.run_preflight(
+                skill_roots={"project": [root]}, runner=runner
+            )
+
+            self.assertTrue(report["ready"])
+            self.assertFalse(report["cli"]["complete"])
+            self.assertIn("project", report["cli"]["error"])
+            self.assertEqual(len(runner.calls), 2)
+
+    def test_inventory_cache_skips_list_commands_but_rechecks_skill_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = [
+                {"name": name, "path": str(self._skill(root, name))}
+                for name in preflight.REQUIRED_CAPABILITIES
+            ]
+            cache_path = root / "cache" / "inventory.json"
+            first_runner = FakeRunner(
+                self._safe_cli_responses({"skills": entries}, {"skills": []})
+            )
+
+            first = preflight.run_preflight(
+                runner=first_runner, cache_path=cache_path, now=1000
+            )
+            cached_runner = FakeRunner({})
+            second = preflight.run_preflight(
+                runner=cached_runner, cache_path=cache_path, now=1001
+            )
+            self.assertEqual(cached_runner.calls, [])
+            shutil.rmtree(root / "grilling")
+            stale = preflight.run_preflight(
+                runner=cached_runner, cache_path=cache_path, now=1002
+            )
+
+            self.assertTrue(first["ready"])
+            self.assertTrue(second["ready"])
+            self.assertFalse(
+                any(call[2:3] == ["list"] for call in cached_runner.calls)
+            )
+            self.assertFalse(stale["ready"])
+            self.assertIn("grilling", stale["missing_required"])
+
+            refresh_runner = FakeRunner(
+                self._safe_cli_responses({"skills": entries}, {"skills": []})
+            )
+            preflight.run_preflight(
+                runner=refresh_runner,
+                cache_path=cache_path,
+                now=1003,
+                refresh_cache=True,
+            )
+            self.assertEqual(
+                refresh_runner.calls[:2],
+                [
+                    ["npx", "skills", "list", "--json"],
+                    ["npx", "skills", "list", "-g", "--json"],
+                ],
+            )
+
+    def test_corrupt_or_expired_inventory_cache_falls_back_to_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = [
+                {"name": name, "path": str(self._skill(root, name))}
+                for name in preflight.REQUIRED_CAPABILITIES
+            ]
+            cache_path = root / "inventory.json"
+            cache_path.write_text("not json", encoding="utf-8")
+            corrupt_runner = FakeRunner(
+                self._safe_cli_responses({"skills": entries}, {"skills": []})
+            )
+
+            corrupt = preflight.run_preflight(
+                runner=corrupt_runner, cache_path=cache_path, now=1000
+            )
+            expired_runner = FakeRunner(
+                self._safe_cli_responses({"skills": entries}, {"skills": []})
+            )
+            expired = preflight.run_preflight(
+                runner=expired_runner, cache_path=cache_path, now=1601
+            )
+
+            self.assertTrue(corrupt["ready"])
+            self.assertTrue(expired["ready"])
+            self.assertEqual(len(corrupt_runner.calls), 2)
+            self.assertEqual(len(expired_runner.calls), 2)
+
     def test_partial_cli_failure_preserves_successful_scope_and_uses_filesystem_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -490,7 +608,7 @@ class PreflightTests(unittest.TestCase):
             grilling = next(item for item in report["capabilities"] if item["name"] == "grilling")
             self.assertFalse(grilling["verified"])
 
-    def test_real_top_level_help_bracket_syntax_enables_safe_update_guidance(self):
+    def test_ready_inventory_skips_top_level_help_and_update_guidance(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             entries = []
@@ -501,10 +619,9 @@ class PreflightTests(unittest.TestCase):
 
             report = preflight.run_preflight(runner=runner)
 
-            self.assertEqual(
-                report["update_commands"],
-                ["npx skills update grilling domain-modeling codebase-design -g"],
-            )
+            self.assertEqual(report["install_commands"], [])
+            self.assertEqual(report["update_commands"], [])
+            self.assertNotIn(["npx", "skills", "--help"], runner.calls)
             self.assertFalse(any(call[2:3] in (["add"], ["update"]) for call in runner.calls))
 
 

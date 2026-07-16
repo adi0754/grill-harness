@@ -37,6 +37,8 @@ class TemplateContractTests(unittest.TestCase):
         "知识条目.yaml",
         "学习草稿.md",
         "知识变更预览.md",
+        "证据记录.yaml",
+        "门禁提问.md",
     }
 
     def read(self, name):
@@ -112,6 +114,89 @@ class TemplateContractTests(unittest.TestCase):
             self.assertIn("输出路径", text, name)
             self.assertIn("停止条件", text, name)
             self.assertNotIn("完整聊天历史", text.replace("不得读取完整聊天历史", ""), name)
+
+    def test_evidence_freshness_defaults_distinguish_baseline_and_external_facts(self):
+        contract = (REFERENCES / "文档与产物契约.md").read_text(encoding="utf-8")
+        for marker in (
+            "证据新鲜度分级",
+            "基线绑定证据",
+            "30 天",
+            "基线漂移",
+            "外部时效证据",
+            "24 小时",
+            "复验命令",
+        ):
+            self.assertIn(marker, contract)
+
+        template = self.load_json_yaml("证据记录.yaml")
+        defaults = template["freshness_defaults"]
+        self.assertEqual(defaults["baseline_bound"]["default_ttl_hours"], 720)
+        self.assertEqual(
+            defaults["baseline_bound"]["primary_invalidation"], "baseline_drift"
+        )
+        self.assertEqual(defaults["external_time_sensitive"]["default_ttl_hours"], 24)
+        self.assertIn(
+            "revalidation_command", defaults["external_time_sensitive"]
+        )
+
+    def test_final_spec_tracks_external_dependency_maturity_and_blockers(self):
+        stage = (REFERENCES / "阶段执行协议.md").read_text(encoding="utf-8")
+        plan_skill = (ROOT / "skills" / "grh-plan" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        specification = self.read("规格.md")
+        for text in (stage, plan_skill):
+            self.assertIn("外部依赖表", text)
+            self.assertIn("verified", text)
+            self.assertIn("provisional", text)
+            self.assertIn("blocked", text)
+            self.assertIn("blocking_level: implementation", text)
+            self.assertIn("RAD-*", text)
+        self.assertIn("未验证外部合同", stage)
+        self.assertIn("逐条点名", stage)
+        for marker in (
+            "外部依赖/合同",
+            "成熟度",
+            "verified | provisional | blocked",
+            "关联 RAD-*",
+        ):
+            self.assertIn(marker, specification)
+
+    def test_readme_limits_three_approvals_claim_to_one_workflow_round(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for marker in (
+            "单个工作流一轮需求的主线确认",
+            "需求变更",
+            "多仓拆分",
+            "高风险取舍",
+            "追加确认",
+            "真实产物版本",
+        ):
+            self.assertIn(marker, readme)
+
+    def test_gate_question_template_and_codex_goal_mapping_are_explicit(self):
+        gate = self.read("门禁提问.md")
+        for marker in (
+            "选项编号",
+            "推荐项",
+            "将创建的 DEC ID",
+            "用户答复原文落档位置",
+            "用户确认记录.md",
+        ):
+            self.assertIn(marker, gate)
+        for option in ("1.", "2.", "3."):
+            self.assertIn(option, gate)
+
+        runtime = (REFERENCES / "Codex运行时.md").read_text(encoding="utf-8")
+        for marker in (
+            "Harness 状态",
+            "Codex 会话 Goal",
+            "needs_user",
+            "blocked",
+            "blocked-on-user",
+            "复述待决问题",
+        ):
+            self.assertIn(marker, runtime)
 
     def test_modes_and_three_human_gates_are_explicit(self):
         text = (REFERENCES / "工作流状态机.md").read_text(encoding="utf-8")

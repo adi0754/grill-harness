@@ -1,0 +1,23 @@
+{
+  "freshness_defaults": {
+    "baseline_bound": {
+      "applies_to": ["test", "build", "static_analysis"],
+      "default_ttl_hours": 720,
+      "primary_invalidation": "baseline_drift",
+      "revalidation_command": "<在新基线上重跑原命令>"
+    },
+    "external_time_sensitive": {
+      "applies_to": ["third_party_api", "provider_status", "external_configuration"],
+      "default_ttl_hours": 24,
+      "primary_invalidation": "expiry_or_external_change",
+      "revalidation_command": "<可复现的外部事实复验命令>"
+    }
+  },
+  "record": {
+    "id": "EVD-001",
+    "freshness_class": "baseline_bound | external_time_sensitive",
+    "validated_at": "<ISO-8601绝对时间>",
+    "expires_at": "<按分级默认值或更短权威期限计算的ISO-8601绝对时间>",
+    "revalidation_command": "<实际复验命令>"
+  }
+}
