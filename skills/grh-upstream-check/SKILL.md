@@ -16,4 +16,6 @@ description: Use when checking required capabilities, upstream skill changes, or
 
 找到内核后运行 `python3 <主内核>/scripts/grh.py entry-check --entry grh-upstream-check --project <项目绝对路径>`，用户范围更窄时追加 `--requested-scope`。资格检查通过后只按主内核契约执行允许范围。
 
+是否接受上游变化由用户在本入口之外决定。报告更新建议时按主内核“用户决策协议”说明推荐与代价，不催促执行、不代替用户接受。
+
 缺少 grill-harness 主内核时失败关闭，不创建 `~/.grill-harness/`，并建议完整安装：`npx skills add <Grill-Harness仓库或URL> -g -a codex claude-code -s '*' -y --copy`。契约不兼容、入口不完整或 `entry-check` 非零退出时原样报告并停止。

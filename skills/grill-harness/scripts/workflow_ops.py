@@ -1130,6 +1130,18 @@ def invalidate_phase_chain(workflow_value, change_id):
     }
 
 
+def _require_gate_confirmation_evidence(record, approval_id):
+    for field in ("user_reply_verbatim", "no_question_reason"):
+        value = record.get(field)
+        if isinstance(value, str) and value.strip():
+            return
+    raise ValueError(
+        "人工门禁批准记录 {} 缺少问答证据：必须携带非空的 user_reply_verbatim"
+        "（用户答复原文）或 no_question_reason（无需提问理由），"
+        "请按用户决策协议补齐后重试".format(approval_id)
+    )
+
+
 def _validated_gate_decision(
     workflow, gate, approval_id, artifact_versions, decision_record
 ):
@@ -1148,6 +1160,7 @@ def _validated_gate_decision(
         raise ValueError("decision record approved_by must be user")
     if record.get("id") != approval_id:
         raise ValueError("decision record approval id does not match --approval-id")
+    _require_gate_confirmation_evidence(record, approval_id)
     ledger = workflow.get("ledger")
     if not isinstance(ledger, list):
         raise ValueError("ledger must be a list")
@@ -1195,6 +1208,19 @@ def approve_gate(
                         ", ".join(blockers)
                     )
                 )
+        if decision_record is None:
+            existing_approval = None
+            ledger_records = workflow.get("ledger", ())
+            if isinstance(ledger_records, list):
+                for item in ledger_records:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("id") == approval_id
+                        and item.get("type") in ("DEC", "CHG")
+                    ):
+                        existing_approval = item
+            if existing_approval is not None:
+                _require_gate_confirmation_evidence(existing_approval, approval_id)
         updated = dict(workflow)
         if decision_record is not None:
             updated["ledger"] = _validated_gate_decision(

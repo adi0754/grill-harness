@@ -36,6 +36,7 @@ SCENARIOS = (
     "route-failure-reselection",
     "knowledge-reuse",
     "upstream-read-only",
+    "out-of-scope-decision",
 )
 
 RUBRIC = (

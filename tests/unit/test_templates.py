@@ -549,6 +549,67 @@ class TemplateContractTests(unittest.TestCase):
         for marker in ("用户问题与期望结果", "用户故事与场景", "实施决策", "测试决策"):
             self.assertIn(marker, specification)
 
+    def test_user_decision_protocol_is_single_sourced_and_anchored_everywhere(self):
+        stage = (REFERENCES / "阶段执行协议.md").read_text(encoding="utf-8")
+        self.assertIn("## 用户决策协议", stage)
+        for marker in (
+            "一次只问一个问题",
+            "按依赖顺序走决策树",
+            "门禁提问.md",
+            "[用户决策协议](#用户决策协议)",
+            "user_reply_verbatim",
+            "no_question_reason",
+            "实际调用 `grilling`",
+        ):
+            self.assertIn(marker, stage)
+
+        main_skill = MAIN_SKILL.read_text(encoding="utf-8")
+        self.assertIn("用户决策协议", main_skill)
+        self.assertIn("答复原文落档", main_skill)
+
+        for entry in (
+            "grh-start",
+            "grh-plan",
+            "grh-run",
+            "grh-check",
+            "grh-recover",
+            "grh-learn",
+            "grh-upstream-check",
+        ):
+            thin_skill = (ROOT / "skills" / entry / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("用户决策协议", thin_skill, entry)
+
+        start_skill = (ROOT / "skills" / "grh-start" / "SKILL.md").read_text(encoding="utf-8")
+        for section in (
+            "面向用户的沟通协议",
+            "自适应需求雷达",
+            "用户决策协议",
+            "文档锚定的 Grill",
+        ):
+            self.assertIn(section, start_skill)
+            self.assertIn("## {}".format(section), stage)
+        self.assertIn("一次性汇报", start_skill)
+        self.assertIn("实际调用 `grilling`", start_skill)
+
+        start_yaml = (
+            ROOT / "skills" / "grh-start" / "agents" / "openai.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("用五个自然语言问题解释", start_yaml)
+        self.assertIn("一次只问一个", start_yaml)
+        self.assertIn("一次性汇报", start_yaml)
+
+        matrix = (REFERENCES / "能力编排矩阵.md").read_text(encoding="utf-8")
+        self.assertIn("按依赖顺序走决策树", matrix)
+        self.assertIn("用户决策协议", matrix)
+
+        gate = self.read("门禁提问.md")
+        self.assertIn("user_reply_verbatim", gate)
+        self.assertIn("no_question_reason", gate)
+
+        confirmation = self.read("用户确认记录.md")
+        self.assertIn("所属阶段", confirmation)
+        self.assertIn("恢复选择", confirmation)
+
     def test_knowledge_templates_capture_boundaries_evidence_and_explicit_promotion(self):
         record = self.load_json_yaml("知识条目.yaml")
         self.assertEqual(record["id"], "KNW-001")

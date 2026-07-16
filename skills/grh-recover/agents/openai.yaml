@@ -1,4 +1,4 @@
 interface:
   display_name: "GRH Recover"
   short_description: "处理中断、漂移、冲突和路线失效"
-  default_prompt: "使用 $grh-recover 从真实状态诊断漂移或失败；任何路线切换都先等待我确认。"
+  default_prompt: "使用 $grh-recover 从真实状态诊断漂移或失败；需要我决定的问题一次只问一个并附推荐答案，任何路线切换都先等待我确认。"

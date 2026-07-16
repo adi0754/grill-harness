@@ -18,4 +18,6 @@ description: Use when a route is chosen and the work needs research, prototypes,
 
 最终规格必须包含外部依赖表，将每项外部合同标为 `verified`、`provisional` 或 `blocked`；所有 `provisional`/`blocked` 项都登记 `blocking_level: implementation` 的 `RAD-*`。等待最终规格批准时，先用 30 秒结论说明所选路线、仓库挑战结论、关键未验证假设和验证边界，再逐条点名未验证外部合同及风险，明确告诉用户正在回答“这份实施合同是否足以授权写代码”。不得只展示 `final_spec_approval`、产物版本或批准命令而不解释授权含义。
 
+仓库挑战判出“需用户决策”的假设，按主内核“用户决策协议”逐个送达：一次只问一个、附推荐答案、答复原文落档，不打包成问题清单。
+
 缺少 grill-harness 主内核时失败关闭，不创建 `~/.grill-harness/`，并建议完整安装：`npx skills add <Grill-Harness仓库或URL> -g -a codex claude-code -s '*' -y --copy`。契约不兼容、入口不完整或 `entry-check` 非零退出时原样报告并停止。

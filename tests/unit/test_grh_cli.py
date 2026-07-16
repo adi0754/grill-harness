@@ -642,6 +642,7 @@ class GrillHarnessCliTests(unittest.TestCase):
                     "approved_by": "user",
                     "gate": "final_spec_approval",
                     "artifact_versions": {"ART-ATOMIC": 1},
+                    "user_reply_verbatim": "同意，按当前规格实施。",
                 }),
                 encoding="utf-8",
             )

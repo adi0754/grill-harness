@@ -16,4 +16,6 @@ description: Use when implementation needs independent review, integration check
 
 找到内核后运行 `python3 <主内核>/scripts/grh.py entry-check --entry grh-check --project <项目绝对路径> [--workflow <工作流或state.yaml绝对路径>]`，用户范围更窄时追加 `--requested-scope`。项目存在多个工作流时必须显式传 `--workflow`，先用 `status`/`overview` 列出候选并让用户选择，不得替用户猜测。资格检查通过后只按主内核契约执行允许范围。
 
+验收是用户的决定。给出“有条件通过”或存在未解决限制时，按主内核“用户决策协议”逐条讲清限制与代价，一次只问一个需要用户拍板的问题并附推荐答案，再等待最终验收决定。
+
 缺少 grill-harness 主内核时失败关闭，不创建 `~/.grill-harness/`，并建议完整安装：`npx skills add <Grill-Harness仓库或URL> -g -a codex claude-code -s '*' -y --copy`。契约不兼容、入口不完整或 `entry-check` 非零退出时原样报告并停止。

@@ -88,6 +88,7 @@ class WorkflowOperationTests(unittest.TestCase):
             "approved_by": "user",
             "gate": "final_spec_approval",
             "artifact_versions": {"ART-ATOMIC": 1},
+            "user_reply_verbatim": "同意，按当前规格实施。",
         }
         return env, workflow, decision
 
@@ -248,6 +249,7 @@ class WorkflowOperationTests(unittest.TestCase):
                     "approved_by": "user",
                     "gate": "final_spec_approval",
                     "artifact_versions": {"ART-001": 1},
+                    "user_reply_verbatim": "同意，按当前规格实施。",
                 }),
                 encoding="utf-8",
             )
@@ -432,6 +434,7 @@ class WorkflowOperationTests(unittest.TestCase):
                 ("status", "pending", "status"),
                 ("approved_by", "agent", "approved_by"),
                 ("id", "DEC-901", "approval id"),
+                ("user_reply_verbatim", "", "问答证据"),
             )
 
             for field, value, message in cases:
@@ -548,6 +551,79 @@ class WorkflowOperationTests(unittest.TestCase):
             self.assertEqual(
                 [item["id"] for item in persisted["ledger"]].count("DEC-900"), 1
             )
+
+    def test_approve_requires_verbatim_reply_or_no_question_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow, decision = self._gate_approval_case(Path(directory))
+            missing = {
+                key: value
+                for key, value in decision.items()
+                if key != "user_reply_verbatim"
+            }
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                with self.assertRaisesRegex(ValueError, "问答证据"):
+                    workflow_ops.approve_gate(
+                        workflow,
+                        "final_spec_approval",
+                        "DEC-900",
+                        {"ART-ATOMIC": 1},
+                        decision_record=missing,
+                    )
+
+                reason_only = dict(missing)
+                reason_only["no_question_reason"] = "规格逐字来自用户指令，本轮无需提问。"
+                report = workflow_ops.approve_gate(
+                    workflow,
+                    "final_spec_approval",
+                    "DEC-900",
+                    {"ART-ATOMIC": 1},
+                    decision_record=reason_only,
+                )
+
+            self.assertEqual(report["approval_id"], "DEC-900")
+            persisted = json.loads(
+                (workflow / "系统" / "state.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                persisted["ledger"][-1]["no_question_reason"],
+                "规格逐字来自用户指令，本轮无需提问。",
+            )
+
+    def test_two_step_approve_rejects_ledger_record_without_confirmation_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env, workflow, decision = self._gate_approval_case(Path(directory))
+            bare = {
+                key: value
+                for key, value in decision.items()
+                if key != "user_reply_verbatim"
+            }
+            decision_path = workflow / "系统" / "bare-decision.yaml"
+            decision_path.write_text(json.dumps(bare), encoding="utf-8")
+            registered = run_cli(
+                "record",
+                "--workflow",
+                str(workflow),
+                "--kind",
+                "ledger",
+                "--record",
+                str(decision_path),
+                env=env,
+            )
+            self.assertEqual(registered.returncode, 0, registered.stdout)
+            state_path = workflow / "系统" / "state.yaml"
+            before = state_path.read_text(encoding="utf-8")
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                with self.assertRaisesRegex(ValueError, "问答证据"):
+                    workflow_ops.approve_gate(
+                        workflow,
+                        "final_spec_approval",
+                        "DEC-900",
+                        {"ART-ATOMIC": 1},
+                    )
+
+            self.assertEqual(state_path.read_text(encoding="utf-8"), before)
 
     def test_mutations_refuse_paths_outside_harness_storage(self):
         with tempfile.TemporaryDirectory() as directory:

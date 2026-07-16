@@ -51,6 +51,7 @@ class ClaudeCodeScenarioEvidenceTests(unittest.TestCase):
             "route-failure-reselection",
             "knowledge-reuse",
             "upstream-read-only",
+            "out-of-scope-decision",
             "human-first-artifacts",
         )
         for scenario in scenarios:

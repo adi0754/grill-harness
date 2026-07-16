@@ -16,4 +16,6 @@ description: Use when an approved final specification is ready for task packagin
 
 找到内核后运行 `python3 <主内核>/scripts/grh.py entry-check --entry grh-run --project <项目绝对路径> [--workflow <工作流或state.yaml绝对路径>]`，用户范围更窄时追加 `--requested-scope`。项目存在多个工作流时必须显式传 `--workflow`，先用 `status`/`overview` 列出候选并让用户选择，不得替用户猜测。资格检查通过后只按主内核契约执行允许范围。
 
+实施中出现规格未覆盖的产品决策、歧义或越权范围时停止并登记 `CHG-xxx`，按主内核“用户决策协议”交回用户：一次只问一个、附推荐答案、答复原文落档后再继续。
+
 缺少 grill-harness 主内核时失败关闭，不创建 `~/.grill-harness/`，并建议完整安装：`npx skills add <Grill-Harness仓库或URL> -g -a codex claude-code -s '*' -y --copy`。契约不兼容、入口不完整或 `entry-check` 非零退出时原样报告并停止。
