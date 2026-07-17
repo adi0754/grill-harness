@@ -104,7 +104,13 @@ class ProjectIdentityTests(unittest.TestCase):
             identity = state.identify_project(project / ".")
 
             self.assertFalse(identity.is_git)
-            self.assertEqual(identity.normalized_path, str(project.resolve()))
+            # normalize_project_path applies os.path.normcase on purpose, so the
+            # expected value must go through the same case folding (identity on
+            # POSIX, lower-case on Windows).
+            self.assertEqual(
+                identity.normalized_path,
+                os.path.normcase(str(project.resolve())),
+            )
             self.assertEqual(identity.relocation_candidates, ())
             self.assertEqual(
                 identity.directory_name,
@@ -150,7 +156,9 @@ class ProjectIdentityTests(unittest.TestCase):
 
             self.assertEqual(
                 identity.normalized_remote,
-                "file://{}".format((base / "work" / "origin.git").resolve()),
+                "file://{}".format(
+                    os.path.normcase((base / "work" / "origin.git").resolve())
+                ),
             )
 
     def test_project_id_does_not_change_when_switching_between_history_roots(self):
@@ -251,7 +259,7 @@ class ProjectIdentityTests(unittest.TestCase):
         self.assertEqual(lower, "file://server/Share/casesensitive.git")
         self.assertNotEqual(upper, lower)
 
-    def test_localhost_file_remote_preserves_posix_path_case(self):
+    def test_localhost_file_remote_follows_local_filesystem_case_semantics(self):
         upper = state.normalize_git_remote(
             "file://localhost/tmp/CaseSensitive.git"
         )
@@ -261,13 +269,23 @@ class ProjectIdentityTests(unittest.TestCase):
 
         self.assertEqual(
             upper,
-            "file://{}".format(Path("/tmp/CaseSensitive.git").resolve()),
+            "file://{}".format(
+                os.path.normcase(Path("/tmp/CaseSensitive.git").resolve())
+            ),
         )
         self.assertEqual(
             lower,
-            "file://{}".format(Path("/tmp/casesensitive.git").resolve()),
+            "file://{}".format(
+                os.path.normcase(Path("/tmp/casesensitive.git").resolve())
+            ),
         )
-        self.assertNotEqual(upper, lower)
+        if os.name == "nt":
+            # Local Windows paths are case-insensitive: both spellings must
+            # normalize to the same location and the same project identity.
+            self.assertEqual(upper, lower)
+        else:
+            # POSIX filesystems are case-sensitive: the case difference is real.
+            self.assertNotEqual(upper, lower)
 
     def test_windows_project_directory_uses_only_the_basename(self):
         identity = state.identify_project(r"C:\Users\Alice\Repo")
@@ -279,8 +297,9 @@ class ProjectIdentityTests(unittest.TestCase):
 
     def test_directory_names_remove_windows_forbidden_characters(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            # Identification is pure path handling, so the directory itself is
+            # never created: Windows forbids these characters in real names.
             project = Path(temp_dir) / 'bad:name*?"<>|'
-            project.mkdir()
 
             identity = state.identify_project(project)
 
@@ -292,14 +311,16 @@ class ProjectIdentityTests(unittest.TestCase):
 
     def test_directory_names_guard_reserved_windows_devices_with_extensions(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            # Never created on disk: CON.txt is itself a reserved name on Windows.
             project = Path(temp_dir) / "CON.txt"
-            project.mkdir()
 
             identity = state.identify_project(project)
 
             self.assertEqual(
                 identity.directory_name,
-                "_CON.txt-{}".format(identity.project_id[:8]),
+                "_{}-{}".format(
+                    os.path.normcase("CON.txt"), identity.project_id[:8]
+                ),
             )
 
     def test_workflow_directory_requires_an_explicit_creation_date(self):
@@ -321,6 +342,39 @@ class ProjectIdentityTests(unittest.TestCase):
         self.assertEqual(default_port, "example.com/Org/Repo")
         self.assertEqual(non_default_port, "example.com:2222/Org/Repo")
         self.assertNotEqual(default_port, non_default_port)
+
+    def test_current_baseline_of_non_git_project_survives_missing_git_binary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "plain"
+            project.mkdir()
+            identity = state.identify_project(project)
+            self.assertFalse(identity.is_git)
+
+            with mock.patch.object(
+                state.subprocess, "run", side_effect=FileNotFoundError("git")
+            ):
+                baseline = state.current_project_baseline(project, identity)
+
+            self.assertEqual(baseline, identity.project_id)
+
+    def test_current_baseline_fails_closed_for_git_project_without_git_binary(self):
+        identity = state.ProjectIdentity(
+            project_id="project-123",
+            directory_name="project-project",
+            normalized_path="/repo",
+            is_git=True,
+            normalized_remote=None,
+            history_roots=("root",),
+            relocation_candidates=(),
+        )
+        with mock.patch.object(
+            state.subprocess, "run", side_effect=FileNotFoundError("git")
+        ):
+            with self.assertRaisesRegex(
+                state.StateContractError,
+                "cannot determine current project baseline",
+            ):
+                state.current_project_baseline("/repo", identity)
 
     def test_current_git_baseline_fails_closed_when_a_required_git_command_fails(self):
         identity = state.ProjectIdentity(

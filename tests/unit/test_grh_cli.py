@@ -19,7 +19,7 @@ def run_cli(*arguments, env=None):
     return subprocess.run(
         [sys.executable, str(CLI), *arguments],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         env=env,
         check=False,
     )
@@ -29,7 +29,7 @@ def run_cli_at(cli, *arguments, env=None):
     return subprocess.run(
         [sys.executable, str(cli), *arguments],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         env=env,
         check=False,
     )
@@ -114,7 +114,7 @@ class GrillHarnessCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             draft = json.loads(result.stdout)["draft"]
             self.assertEqual(draft["record"]["trust_status"], "tentative")
-            self.assertIn("过程产物/学习草稿", draft["path"])
+            self.assertIn(os.path.join("过程产物", "学习草稿"), draft["path"])
 
     def test_knowledge_promote_fails_closed_before_acceptance(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -684,7 +684,10 @@ class GrillHarnessCliTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["command"], "identify")
-            self.assertEqual(payload["project"]["normalized_path"], str(project.resolve()))
+            self.assertEqual(
+                payload["project"]["normalized_path"],
+                os.path.normcase(str(project.resolve())),
+            )
             self.assertFalse(payload["project"]["is_git"])
 
     def test_preflight_accepts_explicit_skill_roots_and_emits_json(self):
@@ -1165,7 +1168,7 @@ class GrillHarnessCliTests(unittest.TestCase):
                         ],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
-                        text=True,
+                        encoding="utf-8",
                         env=env,
                     )
                 )
@@ -1197,7 +1200,7 @@ class GrillHarnessCliTests(unittest.TestCase):
                     command,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True,
+                    encoding="utf-8",
                     env=env,
                 )
                 for _ in range(8)
@@ -1279,8 +1282,45 @@ class GrillHarnessCliTests(unittest.TestCase):
             index = json.loads((root / "项目索引.yaml").read_text(encoding="utf-8"))
             self.assertEqual(len(index["projects"]), 1)
             self.assertEqual(
-                index["projects"][0]["normalized_path"], str(moved.resolve())
+                index["projects"][0]["normalized_path"],
+                os.path.normcase(str(moved.resolve())),
             )
+
+    def test_corrupt_relocated_project_info_fails_closed_as_machine_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "storage"
+            original = base / "original" / "project"
+            original.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", str(original)], check=True)
+            subprocess.run(["git", "-C", str(original), "config", "user.name", "Tests"], check=True)
+            subprocess.run(["git", "-C", str(original), "config", "user.email", "tests@example.com"], check=True)
+            subprocess.run(["git", "-C", str(original), "remote", "add", "origin", "https://github.com/example/project.git"], check=True)
+            (original / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(original), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(original), "commit", "-qm", "init"], check=True)
+            env = dict(os.environ)
+            env["GRILL_HARNESS_TEST_ROOT"] = str(root)
+            created = run_cli(
+                "init", "--project", str(original), "--workflow-name", "损坏信息",
+                "--workflow-key", "corrupt", "--created-date", "2026-07-12", env=env,
+            )
+            self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+            moved = base / "moved" / "project"
+            moved.parent.mkdir()
+            original.rename(moved)
+            info_path = next((root / "项目").glob("*/项目信息.yaml"))
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+            del info["project_id"]
+            info_path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+
+            result = run_cli("identify", "--project", str(moved), env=env)
+
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["error"]["type"], "ValueError")
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_legacy_project_with_overlapping_history_keeps_workflow_owner(self):
         with tempfile.TemporaryDirectory() as temp_dir:

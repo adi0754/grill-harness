@@ -22,7 +22,7 @@ def run_cli(*arguments, env=None):
     return subprocess.run(
         [sys.executable, str(CLI), *arguments],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         env=env,
         check=False,
     )

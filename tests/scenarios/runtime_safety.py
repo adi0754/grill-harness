@@ -8,11 +8,23 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 from typing import Mapping
 
 
-ALLOWED_SOURCE_VARIABLES = ("PATH", "LANG", "LC_ALL", "LC_CTYPE")
+# Windows child processes crash on startup (0xC0000005) without the system
+# variables below; they are system paths and never carry credentials.
+_WINDOWS_SYSTEM_VARIABLES = (
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "COMSPEC",
+    "PATHEXT",
+    "WINDIR",
+)
+ALLOWED_SOURCE_VARIABLES = ("PATH", "LANG", "LC_ALL", "LC_CTYPE") + (
+    _WINDOWS_SYSTEM_VARIABLES if os.name == "nt" else ()
+)
 UUID_PATTERN = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
     re.IGNORECASE,
@@ -34,6 +46,14 @@ def minimal_environment(
     environment.setdefault("PATH", "/usr/bin:/bin")
     environment["HOME"] = home
     environment["TMPDIR"] = temp_dir
+    if os.name == "nt":
+        # Windows tools read TEMP/TMP/USERPROFILE instead of TMPDIR/HOME, so
+        # rewrite them to the isolated locations when the source defines them.
+        for name in ("TEMP", "TMP"):
+            if source.get(name):
+                environment[name] = temp_dir
+        if source.get("USERPROFILE"):
+            environment["USERPROFILE"] = home
     if extra:
         environment.update({name: str(value) for name, value in extra.items()})
     return environment
@@ -148,7 +168,11 @@ def main() -> int:
             command = command[1:]
         if not command:
             parser.error("exec-env requires a command after --")
-        os.execvpe(command[0], command, _environment_from_args(args))
+        environment = _environment_from_args(args)
+        if os.name == "nt":
+            # Windows has no true exec(): run the child and mirror its exit code.
+            return subprocess.run(command, env=environment, check=False).returncode
+        os.execvpe(command[0], command, environment)
     if args.command == "sanitize-file":
         for value in args.paths:
             path = Path(value)

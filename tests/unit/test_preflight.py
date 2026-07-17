@@ -107,6 +107,38 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("timed out", response["stderr"])
         self.assertEqual(run.call_args.kwargs["timeout"], 20)
 
+    def test_default_runner_resolves_the_command_through_path(self):
+        # Windows npx is an npx.cmd shim that bare-name CreateProcess lookup
+        # misses; the runner must resolve it via PATH before executing.
+        with mock.patch.object(
+            preflight.shutil, "which", return_value="/resolved/npx.cmd"
+        ) as which:
+            with mock.patch.object(
+                subprocess,
+                "run",
+                return_value=mock.Mock(returncode=0, stdout="[]", stderr=""),
+            ) as run:
+                response = preflight._default_runner(["npx", "skills", "list", "--json"])
+
+        which.assert_called_once_with("npx")
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/resolved/npx.cmd", "skills", "list", "--json"],
+        )
+        self.assertEqual(response["returncode"], 0)
+
+    def test_default_runner_keeps_the_bare_command_when_path_lookup_fails(self):
+        with mock.patch.object(preflight.shutil, "which", return_value=None):
+            with mock.patch.object(
+                subprocess, "run", side_effect=FileNotFoundError("npx")
+            ) as run:
+                with self.assertRaises(FileNotFoundError):
+                    preflight._default_runner(["npx", "skills", "list", "--json"])
+
+        self.assertEqual(
+            run.call_args.args[0], ["npx", "skills", "list", "--json"]
+        )
+
     def test_complete_public_installation_is_entry_ready_without_changing_dependency_ready(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

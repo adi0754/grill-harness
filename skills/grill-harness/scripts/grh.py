@@ -149,8 +149,18 @@ def _identity_for_stored_project(identity):
     if not project_directory.is_dir() or project_directory.name == identity.directory_name:
         return identity
     info = common.read_yaml(project_directory / "项目信息.yaml", default={})
-    if not isinstance(info, Mapping):
-        raise ValueError("stored relocated project info is invalid")
+    if (
+        not isinstance(info, Mapping)
+        or not isinstance(info.get("project_id"), str)
+        or not info["project_id"].strip()
+        or not isinstance(info.get("directory_name"), str)
+        or not info["directory_name"].strip()
+    ):
+        raise ValueError(
+            "stored relocated project info is invalid: {}".format(
+                project_directory / "项目信息.yaml"
+            )
+        )
     return state.ProjectIdentity(
         project_id=info["project_id"],
         directory_name=info["directory_name"],
@@ -1502,4 +1512,11 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # Machine JSON must not depend on the console locale (GBK on Chinese
+    # Windows would garble the UTF-8 contract for cross-runtime consumers).
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
     sys.exit(main())

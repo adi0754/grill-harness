@@ -245,7 +245,8 @@ def backup_before_schema_migration(
         "{}.{}.{}.bak".format(source.name, timestamp, uuid.uuid4().hex[:8])
     )
     shutil.copy2(str(source), str(backup))
-    with backup.open("rb") as stream:
+    # Windows cannot fsync a read-only handle (EBADF), so open read-write.
+    with backup.open("rb+") as stream:
         _fsync(stream.fileno())
     _fsync_directory(destination_directory)
     return backup

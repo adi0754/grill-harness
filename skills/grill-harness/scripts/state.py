@@ -685,12 +685,21 @@ def current_project_baseline(project_path, identity=None):
 
     project_root = Path(project_path).expanduser().resolve()
     project_identity = identify_project(project_root) if identity is None else identity
-    result = subprocess.run(
-        ["git", "-C", str(project_root), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        # A missing git binary must behave like any other rev-parse failure:
+        # git projects fail closed, plain directories keep their stable identity.
+        if project_identity.is_git:
+            raise StateContractError(
+                "cannot determine current project baseline: git rev-parse failed"
+            ) from error
+        return project_identity.project_id
     if result.returncode != 0 and project_identity.is_git:
         raise StateContractError(
             "cannot determine current project baseline: git rev-parse failed"

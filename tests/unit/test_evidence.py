@@ -1,4 +1,5 @@
 import copy
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -11,6 +12,9 @@ import validate
 
 
 CURRENT_TIME = "2026-07-12T12:00:00+08:00"
+# os.path.isabs("/repo") is False on Windows (Python 3.13), so build a real
+# platform-absolute fixture path instead of hard-coding a POSIX one.
+REPO_DIR = os.path.abspath(os.sep + "repo")
 
 
 def valid_evidence(**changes):
@@ -19,7 +23,7 @@ def valid_evidence(**changes):
         "status": "valid",
         "currentness": "current",
         "command": "python3 -m unittest discover -s tests -p 'test_*.py'",
-        "working_directory": "/repo",
+        "working_directory": REPO_DIR,
         "exit_code": 0,
         "baseline": "abc123",
         "producer": "independent-verifier",
@@ -31,7 +35,7 @@ def valid_evidence(**changes):
         "executed_at": "2026-07-12T10:00:00+08:00",
         "validated_at": "2026-07-12T10:01:00+08:00",
         "expires_at": "2026-07-13T10:01:00+08:00",
-        "output_path": "/repo/.evidence/EVD-001.log",
+        "output_path": os.path.join(REPO_DIR, ".evidence", "EVD-001.log"),
     }
     record.update(changes)
     return record

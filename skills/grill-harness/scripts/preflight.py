@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -24,9 +25,14 @@ INVENTORY_CACHE_VERSION = 1
 
 
 def _default_runner(command, timeout=DEFAULT_RUNNER_TIMEOUT_SECONDS):
+    # On Windows the skills CLI is an npx.cmd shim that CreateProcess cannot
+    # find by bare name; resolve through PATH first. Arguments stay fixed
+    # module literals, so no untrusted text ever reaches a batch file.
+    executable = shutil.which(command[0])
+    resolved = [executable, *command[1:]] if executable else list(command)
     try:
         result = subprocess.run(
-            command,
+            resolved,
             capture_output=True,
             text=True,
             check=False,
